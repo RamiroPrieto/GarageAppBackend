@@ -1,0 +1,264 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ENUMS
+
+enum ParkingStatus {
+  AVAILABLE
+  UNAVAILABLE
+  MAINTENANCE
+}
+
+enum ParkingType {
+  HOUSE
+  BUILDING
+  COMMERCIAL
+  GARAGE
+}
+
+enum ReservationStatus {
+  PENDING
+  CONFIRMED
+  CANCELLED
+  EXPIRED
+  COMPLETED
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+  REFUNDED
+}
+
+// MODELS
+
+model User {
+  id Int @id @default(autoincrement())
+
+  firstName String
+  lastName  String
+
+  email    String @unique
+  password String
+
+  phone        String?
+  profileImage String?
+
+  emailVerified Boolean @default(false)
+  isAdmin       Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+
+  vehicles Vehicle[]
+
+  parkings Parking[] @relation("ParkingOwner")
+
+  reservations Reservation[]
+
+  reviews Review[]
+
+  favorites Favorite[]
+
+  payments Payment[] @relation("PayerPayments")
+}
+
+model Vehicle {
+  id Int @id @default(autoincrement())
+
+  userId Int
+
+  licensePlate String
+
+  brand String?
+  model String?
+  color String?
+
+  isDefault Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+
+  user User @relation(fields: [userId], references: [id])
+
+  reservations Reservation[]
+}
+
+model Parking {
+  id Int @id @default(autoincrement())
+
+  ownerId Int
+
+  title       String
+  description String?
+
+  address String
+  city    String
+  country String
+
+  latitude  Decimal
+  longitude Decimal
+
+  pricePerHour Decimal
+  pricePerDay  Decimal?
+
+  maxHeight Decimal?
+  maxWidth  Decimal?
+
+  covered Boolean @default(false)
+
+  parkingType ParkingType
+  
+  parkingStatus ParkingStatus @default(UNAVAILABLE)
+
+  active Boolean @default(true)
+
+  availableSince DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+
+  owner User @relation("ParkingOwner", fields: [ownerId], references: [id])
+
+  photos ParkingPhoto[]
+
+  reservations Reservation[]
+
+  reviews Review[]
+
+  favorites Favorite[]
+}
+
+model ParkingPhoto {
+  id Int @id @default(autoincrement())
+
+  parkingId Int
+
+  imageUrl String
+
+  displayOrder Int?
+
+  isCover Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+
+  parking Parking @relation(fields: [parkingId], references: [id])
+}
+
+model Reservation {
+  id Int @id @default(autoincrement())
+
+  parkingId Int
+
+  userId Int
+
+  vehicleId Int?
+
+  startDatetime DateTime
+
+  endDatetime DateTime
+
+  totalPrice Decimal
+
+  status ReservationStatus @default(PENDING)
+
+  expiresAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+
+  user User @relation(fields: [userId], references: [id])
+
+  parking Parking @relation(fields: [parkingId], references: [id])
+
+  vehicle Vehicle? @relation(fields: [vehicleId], references: [id])
+
+  payment Payment?
+}
+
+model Payment {
+  id Int @id @default(autoincrement())
+
+  reservationId Int @unique
+
+  payerUserId Int
+
+  amount Decimal
+
+  currency String
+
+  commission Decimal
+
+  ownerAmount Decimal
+
+  paymentMethod String
+
+  transactionId String?
+
+  stripePaymentIntentId String?
+
+  status PaymentStatus @default(PENDING)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+
+  reservation Reservation @relation(fields: [reservationId], references: [id])
+
+  payer User @relation("PayerPayments", fields: [payerUserId], references: [id])
+}
+
+model Review {
+  id Int @id @default(autoincrement())
+
+  parkingId Int
+
+  userId Int
+
+  rating Int
+
+  comment String?
+
+  createdAt DateTime @default(now())
+
+  // Relations
+
+  parking Parking @relation(fields: [parkingId], references: [id])
+
+  user User @relation(fields: [userId], references: [id])
+}
+
+model Favorite {
+  userId Int
+
+  parkingId Int
+
+  createdAt DateTime @default(now())
+
+  // Relations
+
+  user User @relation(fields: [userId], references: [id])
+
+  parking Parking @relation(fields: [parkingId], references: [id])
+
+  @@id([userId, parkingId])
+}
