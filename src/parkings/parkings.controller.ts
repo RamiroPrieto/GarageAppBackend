@@ -19,6 +19,7 @@ import {
   import { UpdateParkingDto } from './dto/update-parking.dto';
   import { Query } from '@nestjs/common';
   import { NearbyParkingsDto } from './dto/nearby-parkings.dto';
+  import { UpdateParkingActiveDto } from './dto/update-parking-active.dto';
   
   @Controller('parkings')
   export class ParkingsController {
@@ -83,4 +84,17 @@ import {
       );
     }
 
+    @UseGuards(JwtAuthGuard)
+    @Patch(':id/active')
+    updateActive(
+      @Req() request: Request,
+      @Param('id') id: string,
+      @Body() updateParkingActiveDto: UpdateParkingActiveDto,
+    ) {
+      return this.parkingsService.updateActive(
+        request.user!.userId,
+        Number(id),
+        updateParkingActiveDto,
+      );
+    }
   }

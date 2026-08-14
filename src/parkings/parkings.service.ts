@@ -3,6 +3,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CreateParkingDto } from './dto/create-parking.dto';
 import { UpdateParkingDto } from 'src/parkings/dto/update-parking.dto';
 import { Prisma } from '@prisma/client';
+import { UpdateParkingActiveDto } from './dto/update-parking-active.dto';
 
 @Injectable()
 export class ParkingsService {
@@ -37,7 +38,7 @@ export class ParkingsService {
         parkingType: createParkingDto.parkingType,
 
         // Los dejamos controlados por backend
-        parkingStatus: 'UNAVAILABLE',
+        parkingStatus: 'AVAILABLE',
         active: true,
       },
     });
@@ -175,5 +176,30 @@ export class ParkingsService {
       WHERE nearby.distance <= ${radius}
       ORDER BY nearby.distance ASC;
     `);
+  }
+  async updateActive(
+    ownerId: number,
+    parkingId: number,
+    updateParkingActiveDto: UpdateParkingActiveDto,
+  ) {
+    const parking = await this.prisma.parking.findFirst({
+      where: {
+        id: parkingId,
+        ownerId,
+      },
+    });
+  
+    if (!parking) {
+      throw new NotFoundException('Parking no encontrado');
+    }
+  
+    return this.prisma.parking.update({
+      where: {
+        id: parkingId,
+      },
+      data: {
+        active: updateParkingActiveDto.active,
+      },
+    });
   }
 }

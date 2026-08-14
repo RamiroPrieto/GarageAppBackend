@@ -51,6 +51,8 @@ model User {
   phone        String?
   profileImage String?
 
+  stripeCustomerId String? @unique
+
   emailVerified Boolean @default(false)
   isAdmin       Boolean @default(false)
 
@@ -120,8 +122,8 @@ model Parking {
 
   parkingType ParkingType
   
-  parkingStatus ParkingStatus @default(UNAVAILABLE)
-
+  parkingStatus ParkingStatus @default(AVAILABLE)
+  
   active Boolean @default(true)
 
   availableSince DateTime?
