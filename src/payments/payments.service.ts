@@ -239,4 +239,124 @@ import {
           paymentIntent.client_secret,
       };
     }
+    async handleWebhook(
+      rawBody: Buffer,
+      signature: string,
+    ) {
+      const event = this.stripe.webhooks.constructEvent(
+        rawBody,
+        signature,
+        process.env.STRIPE_WEBHOOK_SECRET!,
+      );
+    
+      console.log(
+        'Stripe webhook recibido:',
+        event.type,
+      );
+    
+      switch (event.type) {
+        case 'payment_intent.succeeded': {
+          const paymentIntent =
+            event.data.object as Stripe.PaymentIntent;
+    
+          const payment =
+            await this.prisma.payment.findUnique({
+              where: {
+                stripePaymentIntentId:
+                  paymentIntent.id,
+              },
+            });
+    
+          if (!payment) {
+            console.log(
+              'Payment no encontrado:',
+              paymentIntent.id,
+            );
+    
+            break;
+          }
+    
+          await this.prisma.$transaction([
+            this.prisma.payment.update({
+              where: {
+                id: payment.id,
+              },
+              data: {
+                status: 'SUCCEEDED',
+              },
+            }),
+    
+            this.prisma.reservation.update({
+              where: {
+                id: payment.reservationId,
+              },
+              data: {
+                status: 'CONFIRMED',
+              },
+            }),
+          ]);
+    
+          console.log(
+            'Pago confirmado:',
+            payment.id,
+          );
+    
+          console.log(
+            'Reserva confirmada:',
+            payment.reservationId,
+          );
+    
+          break;
+        }
+    
+        case 'payment_intent.payment_failed': {
+          const paymentIntent =
+            event.data.object as Stripe.PaymentIntent;
+    
+          const payment =
+            await this.prisma.payment.findUnique({
+              where: {
+                stripePaymentIntentId:
+                  paymentIntent.id,
+              },
+            });
+    
+          if (!payment) {
+            console.log(
+              'Payment no encontrado:',
+              paymentIntent.id,
+            );
+    
+            break;
+          }
+    
+          await this.prisma.payment.update({
+            where: {
+              id: payment.id,
+            },
+            data: {
+              status: 'FAILED',
+            },
+          });
+    
+          console.log(
+            'Pago fallido:',
+            payment.id,
+          );
+    
+          break;
+        }
+    
+        default: {
+          console.log(
+            'Evento de Stripe no manejado:',
+            event.type,
+          );
+        }
+      }
+    
+      return {
+        received: true,
+      };
+    }
   }

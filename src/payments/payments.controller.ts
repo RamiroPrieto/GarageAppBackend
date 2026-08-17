@@ -3,7 +3,8 @@ import {
   Post,
   Req,
   UseGuards,
-  Body
+  Body,
+  Headers,
 } from '@nestjs/common';
 
 import type { Request } from 'express';
@@ -33,6 +34,16 @@ export class PaymentsController {
     return this.paymentsService.createPayment(
       request.user!.userId,
       createPaymentDto,
+    );
+  }
+  @Post('webhook')
+  handleWebhook(
+    @Headers('stripe-signature') signature: string,
+    @Req() request: Request & { rawBody: Buffer },
+  ) {
+    return this.paymentsService.handleWebhook(
+      request.rawBody,
+      signature,
     );
   }
 }
