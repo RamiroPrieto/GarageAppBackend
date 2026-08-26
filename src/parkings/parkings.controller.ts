@@ -52,7 +52,21 @@ import {
         query.radius,
       );
     }
-    
+
+    @Get("available")
+    findAvailable(
+      @Query("startDatetime") startDatetime: string,
+      @Query("endDatetime") endDatetime: string,
+      @Query('latitude') latitude: string,
+      @Query('longitude') longitude: string,
+      @Query('radius') radius: string,
+    ) {
+      return this.parkingsService.findAvailable(
+        new Date(startDatetime),
+        new Date(endDatetime),
+      );
+    }
+
     @Get(':id')
     findOne(@Param('id') id: string) {
     return this.parkingsService.findOne(Number(id));

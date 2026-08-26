@@ -4,7 +4,7 @@ import { CreateParkingDto } from './dto/create-parking.dto';
 import { UpdateParkingDto } from 'src/parkings/dto/update-parking.dto';
 import { Prisma } from '@prisma/client';
 import { UpdateParkingActiveDto } from './dto/update-parking-active.dto';
-
+import { ReservationStatus } from '@prisma/client';
 @Injectable()
 export class ParkingsService {
   constructor(private readonly prisma: PrismaService) {}
@@ -199,6 +199,41 @@ export class ParkingsService {
       },
       data: {
         active: updateParkingActiveDto.active,
+      },
+    });
+  }
+  async findAvailable(
+    startDatetime: Date,
+    endDatetime: Date,
+  ) {
+    return this.prisma.parking.findMany({
+      where: {
+        active: true,
+  
+        reservations: {
+          none: {
+            AND: [
+              {
+                status: {
+                  in: [
+                    ReservationStatus.PENDING,
+                    ReservationStatus.CONFIRMED,
+                  ],
+                },
+              },
+              {
+                startDatetime: {
+                  lt: endDatetime,
+                },
+              },
+              {
+                endDatetime: {
+                  gt: startDatetime,
+                },
+              },
+            ],
+          },
+        },
       },
     });
   }
