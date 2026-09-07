@@ -276,25 +276,7 @@ import {
             break;
           }
     
-          await this.prisma.$transaction([
-            this.prisma.payment.update({
-              where: {
-                id: payment.id,
-              },
-              data: {
-                status: 'SUCCEEDED',
-              },
-            }),
-    
-            this.prisma.reservation.update({
-              where: {
-                id: payment.reservationId,
-              },
-              data: {
-                status: 'CONFIRMED',
-              },
-            }),
-          ]);
+          await this.markPaymentSucceeded(payment.id);
     
           console.log(
             'Pago confirmado:',
@@ -358,5 +340,52 @@ import {
       return {
         received: true,
       };
+    }
+
+    async confirmPayment(userId: number, reservationId: number) {
+      const payment = await this.prisma.payment.findFirst({
+        where: {
+          reservationId,
+          payerUserId: userId,
+        },
+      });
+
+      if (!payment) {
+        throw new NotFoundException('Pago no encontrado');
+      }
+
+      const paymentIntent = await this.stripe.paymentIntents.retrieve(
+        payment.stripePaymentIntentId,
+      );
+
+      if (paymentIntent.status !== 'succeeded') {
+        throw new BadRequestException('El pago no fue completado');
+      }
+
+      await this.markPaymentSucceeded(payment.id);
+
+      return this.prisma.reservation.findFirstOrThrow({
+        where: {
+          id: reservationId,
+          userId,
+        },
+      });
+    }
+
+    private async markPaymentSucceeded(paymentId: number) {
+      const payment = await this.prisma.payment.findUniqueOrThrow({
+        where: { id: paymentId },
+      });
+
+      await this.prisma.$transaction([
+        this.prisma.payment.update({
+          where: { id: payment.id },
+          data: { status: 'SUCCEEDED' },
+        }),
+        this.prisma.reservation.update({
+          where: { id: payment.reservationId },
+          data: { status: 'CONFIRMED' },
+        }),
+      ]);
     }
   }

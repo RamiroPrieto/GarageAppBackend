@@ -46,7 +46,8 @@ model User {
   lastName  String
 
   email    String @unique
-  password String
+  password String?
+  googleId String? @unique
 
   phone        String?
   profileImage String?
@@ -72,6 +73,20 @@ model User {
   favorites Favorite[]
 
   payments Payment[] @relation("PayerPayments")
+  emailVerificationTokens EmailVerificationToken[]
+}
+
+model EmailVerificationToken {
+  id Int @id @default(autoincrement())
+  userId Int
+  tokenHash String @unique
+  expiresAt DateTime
+  usedAt DateTime?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 model Vehicle {

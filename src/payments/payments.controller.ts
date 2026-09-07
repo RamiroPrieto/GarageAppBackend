@@ -1,5 +1,6 @@
 import {
   Controller,
+  Param,
   Post,
   Req,
   UseGuards,
@@ -34,6 +35,18 @@ export class PaymentsController {
     return this.paymentsService.createPayment(
       request.user!.userId,
       createPaymentDto,
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post(':reservationId/confirm')
+  confirmPayment(
+    @Req() request: Request,
+    @Param('reservationId') reservationId: string,
+  ) {
+    return this.paymentsService.confirmPayment(
+      request.user!.userId,
+      Number(reservationId),
     );
   }
   @Post('webhook')
