@@ -1,13 +1,95 @@
-import { Injectable , NotFoundException } from '@nestjs/common';
+import {
+  BadGatewayException,
+  Injectable,
+  NotFoundException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateParkingDto } from './dto/create-parking.dto';
 import { UpdateParkingDto } from 'src/parkings/dto/update-parking.dto';
 import { Prisma } from '@prisma/client';
 import { UpdateParkingActiveDto } from './dto/update-parking-active.dto';
 import { ReservationStatus } from '@prisma/client';
+import { GeocodeParkingAddressDto } from './dto/geocode-parking-address.dto';
 @Injectable()
 export class ParkingsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly configService: ConfigService,
+  ) {}
+
+  async geocodeAddress({
+    address,
+    city,
+    country,
+  }: GeocodeParkingAddressDto): Promise<{ latitude: number; longitude: number }> {
+    const apiKey = this.configService.get<string>(
+      'GOOGLE_MAPS_GEOCODING_API_KEY',
+    );
+
+    if (!apiKey) {
+      throw new ServiceUnavailableException(
+        'El servicio de ubicación no está configurado',
+      );
+    }
+
+    const query = [address, city, country].join(', ');
+    const url = new URL('https://maps.googleapis.com/maps/api/geocode/json');
+    url.searchParams.set('address', query);
+    url.searchParams.set('key', apiKey);
+
+    let response: Response;
+    try {
+      response = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+    } catch {
+      throw new ServiceUnavailableException(
+        'No pudimos consultar el servicio de ubicación',
+      );
+    }
+
+    let payload: {
+      status?: string;
+      results?: Array<{ geometry?: { location?: { lat?: number; lng?: number } } }>;
+    };
+    try {
+      payload = await response.json();
+    } catch {
+      throw new BadGatewayException('El servicio de ubicación respondió inválidamente');
+    }
+
+    if (!response.ok || payload.status !== 'OK') {
+      if (payload.status === 'ZERO_RESULTS') {
+        throw new NotFoundException(
+          'No pudimos encontrar esa dirección. Revisá la dirección, ciudad y país.',
+        );
+      }
+
+      throw new ServiceUnavailableException(
+        'No pudimos consultar el servicio de ubicación',
+      );
+    }
+
+    const location = payload.results?.[0]?.geometry?.location;
+    const latitude = location?.lat;
+    const longitude = location?.lng;
+    if (
+      typeof latitude !== 'number' ||
+      typeof longitude !== 'number' ||
+      !Number.isFinite(latitude) ||
+      !Number.isFinite(longitude) ||
+      latitude < -90 ||
+      latitude > 90 ||
+      longitude < -180 ||
+      longitude > 180
+    ) {
+      throw new NotFoundException(
+        'No pudimos encontrar esa dirección. Revisá la dirección, ciudad y país.',
+      );
+    }
+
+    return { latitude, longitude };
+  }
 
   async create(
     ownerId: number,

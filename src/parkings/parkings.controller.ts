@@ -20,6 +20,7 @@ import {
   import { Query } from '@nestjs/common';
   import { NearbyParkingsDto } from './dto/nearby-parkings.dto';
   import { UpdateParkingActiveDto } from './dto/update-parking-active.dto';
+  import { GeocodeParkingAddressDto } from './dto/geocode-parking-address.dto';
   
   @Controller('parkings')
   export class ParkingsController {
@@ -37,6 +38,12 @@ import {
         request.user!.userId,
         createParkingDto,
       );
+    }
+
+    @UseGuards(JwtAuthGuard)
+    @Post('geocode')
+    geocode(@Body() geocodeParkingAddressDto: GeocodeParkingAddressDto) {
+      return this.parkingsService.geocodeAddress(geocodeParkingAddressDto);
     }
 
     @Get()
