@@ -135,6 +135,12 @@ export class ParkingsService {
       },
     });
   }
+  async findMine(ownerId: number) {
+    return this.prisma.parking.findMany({
+      where: { ownerId },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
   async findOne(id: number) {
     const parking = await this.prisma.parking.findUnique({
       where: {
@@ -287,8 +293,11 @@ export class ParkingsService {
   async findAvailable(
     startDatetime: Date,
     endDatetime: Date,
+    latitude: number,
+    longitude: number,
+    radius: number,
   ) {
-    return this.prisma.parking.findMany({
+    const parkings = await this.prisma.parking.findMany({
       where: {
         active: true,
   
@@ -317,6 +326,34 @@ export class ParkingsService {
           },
         },
       },
+    });
+
+    if (
+      !Number.isFinite(latitude) ||
+      !Number.isFinite(longitude) ||
+      !Number.isFinite(radius) ||
+      radius < 0
+    ) {
+      return parkings;
+    }
+
+    return parkings.filter((parking) => {
+      const parkingLatitude = Number(parking.latitude);
+      const parkingLongitude = Number(parking.longitude);
+      if (!Number.isFinite(parkingLatitude) || !Number.isFinite(parkingLongitude)) {
+        return false;
+      }
+
+      const latitudeDelta = ((parkingLatitude - latitude) * Math.PI) / 180;
+      const longitudeDelta = ((parkingLongitude - longitude) * Math.PI) / 180;
+      const haversine =
+        Math.sin(latitudeDelta / 2) ** 2 +
+        Math.cos((latitude * Math.PI) / 180) *
+          Math.cos((parkingLatitude * Math.PI) / 180) *
+          Math.sin(longitudeDelta / 2) ** 2;
+      const distance = 2 * 6371 * Math.atan2(Math.sqrt(haversine), Math.sqrt(1 - haversine));
+
+      return distance <= radius;
     });
   }
 }

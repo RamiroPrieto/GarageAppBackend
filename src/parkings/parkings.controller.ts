@@ -60,6 +60,12 @@ import {
       );
     }
 
+    @UseGuards(JwtAuthGuard)
+    @Get('mine')
+    findMine(@Req() request: Request) {
+      return this.parkingsService.findMine(request.user!.userId);
+    }
+
     @Get("available")
     findAvailable(
       @Query("startDatetime") startDatetime: string,
@@ -71,6 +77,9 @@ import {
       return this.parkingsService.findAvailable(
         new Date(startDatetime),
         new Date(endDatetime),
+        Number(latitude),
+        Number(longitude),
+        Number(radius),
       );
     }
 
