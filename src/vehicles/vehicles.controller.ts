@@ -14,6 +14,7 @@ import {
   import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
   import { CreateVehicleDto } from 'src/vehicles/dto/create-vehicle.dto';
   import { UpdateVehicleDto } from 'src/vehicles/dto/update-vehicle.dto';
+  import { UpdateVehicleDefaultDto } from './dto/update-vehicle-default.dto';
   import { VehiclesService } from './vehicles.service';
 
   
@@ -82,10 +83,12 @@ import {
     setDefault(
       @Req() request: Request,
       @Param('id') id: string,
+      @Body() updateVehicleDefaultDto: UpdateVehicleDefaultDto,
     ) {
       return this.vehiclesService.setDefault(
         request.user!.userId,
         Number(id),
+        updateVehicleDefaultDto.isDefault,
       );
     }
   }

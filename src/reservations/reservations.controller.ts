@@ -42,6 +42,12 @@ import {
     }
 
     @UseGuards(JwtAuthGuard)
+    @Get('upcoming/home')
+    findUpcomingForHome(@Req() request: Request) {
+      return this.reservationsService.findUpcomingForHome(request.user!.userId);
+    }
+
+    @UseGuards(JwtAuthGuard)
     @Get(':id')
     findOne(
     @Req() request: Request,
@@ -63,5 +69,17 @@ import {
         request.user!.userId,
         Number(id),
     );
+    }
+
+    @UseGuards(JwtAuthGuard)
+    @Post(':id/start/customer')
+    confirmCustomerStart(@Req() request: Request, @Param('id') id: string) {
+      return this.reservationsService.confirmCustomerStart(request.user!.userId, Number(id));
+    }
+
+    @UseGuards(JwtAuthGuard)
+    @Post(':id/start/owner')
+    confirmOwnerStart(@Req() request: Request, @Param('id') id: string) {
+      return this.reservationsService.confirmOwnerStart(request.user!.userId, Number(id));
     }
   }

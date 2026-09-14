@@ -9,6 +9,8 @@ export class VehiclesService {
   constructor(private readonly prisma: PrismaService) {}
 
   async create(userId: number, createVehicleDto: CreateVehicleDto) {
+    const vehicleCount = await this.prisma.vehicle.count({ where: { userId } });
+
     return this.prisma.vehicle.create({
       data: {
         userId,
@@ -16,6 +18,7 @@ export class VehiclesService {
         brand: createVehicleDto.brand,
         model: createVehicleDto.model,
         color: createVehicleDto.color,
+        isDefault: vehicleCount === 0,
       },
     });
   }
@@ -93,7 +96,7 @@ export class VehiclesService {
       message: 'Vehículo eliminado correctamente',
     };
   }
-  async setDefault(userId: number, vehicleId: number) {
+  async setDefault(userId: number, vehicleId: number, isDefault: boolean) {
     const vehicle = await this.prisma.vehicle.findFirst({
       where: {
         id: vehicleId,
@@ -105,7 +108,14 @@ export class VehiclesService {
       throw new NotFoundException('Vehículo no encontrado');
     }
   
-    await this.prisma.$transaction([
+    if (!isDefault) {
+      return this.prisma.vehicle.update({
+        where: { id: vehicleId },
+        data: { isDefault: false },
+      });
+    }
+
+    const [, updatedVehicle] = await this.prisma.$transaction([
       this.prisma.vehicle.updateMany({
         where: {
           userId,
@@ -125,8 +135,6 @@ export class VehiclesService {
       }),
     ]);
   
-    return {
-      message: 'Vehículo establecido como predeterminado',
-    };
+    return updatedVehicle;
   }
 }

@@ -25,6 +25,7 @@ enum ParkingType {
 enum ReservationStatus {
   PENDING
   CONFIRMED
+  ACTIVE
   CANCELLED
   EXPIRED
   COMPLETED
@@ -67,6 +68,8 @@ model User {
   parkings Parking[] @relation("ParkingOwner")
 
   reservations Reservation[]
+
+  pushTokens PushToken[]
 
   reviews Review[]
 
@@ -197,6 +200,10 @@ model Reservation {
 
   expiresAt DateTime?
 
+  customerStartedAt DateTime?
+  ownerStartedAt    DateTime?
+  startedAt         DateTime?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -206,9 +213,21 @@ model Reservation {
 
   parking Parking @relation(fields: [parkingId], references: [id])
 
-  vehicle Vehicle? @relation(fields: [vehicleId], references: [id])
+  vehicle Vehicle? @relation(fields: [vehicleId], references: [id], onDelete: SetNull)
 
   payment Payment?
+}
+
+model PushToken {
+  id Int @id @default(autoincrement())
+  userId Int
+  token String @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 model Payment {

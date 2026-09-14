@@ -5,12 +5,15 @@ import {
   } from '@nestjs/common';
   
   import { PrismaService } from '../prisma/prisma.service';
-  import { CreateReservationDto } from './dto/create-reservation.dto';
+import { CreateReservationDto } from './dto/create-reservation.dto';
+import { Cron } from '@nestjs/schedule';
+import { NotificationsService } from '../notifications/notifications.service';
   
   @Injectable()
   export class ReservationsService {
     constructor(
       private readonly prisma: PrismaService,
+      private readonly notifications: NotificationsService,
     ) {}
   
     async create(
@@ -114,7 +117,7 @@ import {
               parkingId,
       
               status: {
-                in: ['PENDING', 'CONFIRMED'],
+                    in: ['PENDING', 'CONFIRMED', 'ACTIVE'],
               },
       
               startDatetime: {
@@ -166,7 +169,8 @@ import {
           },
         });
       }
-      async findAll(userId: number) {
+  async findAll(userId: number) {
+        await this.completeEndedReservations();
         return this.prisma.reservation.findMany({
           where: {
             userId,
@@ -189,7 +193,8 @@ import {
           },
         });
       }
-      async findOne(userId: number, reservationId: number) {
+  async findOne(userId: number, reservationId: number) {
+        await this.completeEndedReservations();
         const reservation = await this.prisma.reservation.findFirst({
           where: {
             id: reservationId,
@@ -250,5 +255,104 @@ import {
             status: 'CANCELLED',
           },
         });
+      }
+
+      async findForParking(ownerId: number, parkingId: number) {
+        await this.completeEndedReservations();
+        const parking = await this.prisma.parking.findFirst({ where: { id: parkingId, ownerId } });
+        if (!parking) throw new NotFoundException('Parking no encontrado');
+
+        return this.prisma.reservation.findMany({
+          where: { parkingId },
+          include: {
+            user: { select: { id: true, firstName: true, lastName: true, email: true } },
+            vehicle: true,
+            parking: { include: { photos: { orderBy: { displayOrder: 'asc' } } } },
+          },
+          orderBy: { startDatetime: 'desc' },
+        });
+      }
+
+      async findUpcomingForHome(userId: number) {
+        await this.completeEndedReservations();
+        const now = new Date();
+        return this.prisma.reservation.findFirst({
+          where: {
+            status: { in: ['CONFIRMED', 'ACTIVE'] },
+            startDatetime: { lte: new Date(now.getTime() + 10 * 60 * 1000) },
+            endDatetime: { gte: now },
+            OR: [{ userId }, { parking: { ownerId: userId } }],
+          },
+          include: {
+            parking: { include: { photos: { orderBy: { displayOrder: 'asc' } } } },
+            vehicle: true,
+            user: { select: { id: true, firstName: true, lastName: true } },
+          },
+          orderBy: { startDatetime: 'asc' },
+        });
+      }
+
+      async confirmCustomerStart(userId: number, reservationId: number) {
+        const reservation = await this.prisma.reservation.findFirst({ where: { id: reservationId, userId } });
+        if (!reservation) throw new NotFoundException('Reserva no encontrada');
+        return this.confirmStart(reservation, 'customer');
+      }
+
+      async confirmOwnerStart(userId: number, reservationId: number) {
+        const reservation = await this.prisma.reservation.findFirst({
+          where: { id: reservationId, parking: { ownerId: userId } },
+        });
+        if (!reservation) throw new NotFoundException('Reserva no encontrada');
+        return this.confirmStart(reservation, 'owner');
+      }
+
+      private async confirmStart(reservation: { id: number; status: string; endDatetime: Date; customerStartedAt: Date | null; ownerStartedAt: Date | null }, role: 'customer' | 'owner') {
+        if (reservation.status !== 'CONFIRMED') {
+          throw new BadRequestException('La reserva no está lista para iniciarse');
+        }
+        if (reservation.endDatetime <= new Date()) {
+          await this.completeEndedReservations();
+          throw new BadRequestException('La reserva ya finalizó');
+        }
+
+        const now = new Date();
+        const customerStartedAt = role === 'customer' ? reservation.customerStartedAt ?? now : reservation.customerStartedAt;
+        const ownerStartedAt = role === 'owner' ? reservation.ownerStartedAt ?? now : reservation.ownerStartedAt;
+        return this.prisma.reservation.update({
+          where: { id: reservation.id },
+          data: {
+            ...(role === 'customer' ? { customerStartedAt } : { ownerStartedAt }),
+            ...(customerStartedAt && ownerStartedAt ? { status: 'ACTIVE', startedAt: now } : {}),
+          },
+        });
+      }
+
+      @Cron('0 * * * * *')
+      async completeEndedReservations() {
+        await this.prisma.reservation.updateMany({
+          where: { status: { in: ['CONFIRMED', 'ACTIVE'] }, endDatetime: { lte: new Date() } },
+          data: { status: 'COMPLETED' },
+        });
+      }
+
+      @Cron('0 * * * * *')
+      async sendScheduledReminders() {
+        const now = new Date();
+        for (const minutes of [30, 10]) {
+          const target = new Date(now.getTime() + minutes * 60 * 1000);
+          const reservations = await this.prisma.reservation.findMany({
+            where: { status: 'CONFIRMED', startDatetime: { gte: new Date(target.getTime() - 30_000), lte: new Date(target.getTime() + 30_000) } },
+            include: { parking: true, vehicle: true },
+          });
+          await Promise.all(reservations.flatMap((reservation) => {
+            const schedule = reservation.startDatetime.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' });
+            const vehicle = reservation.vehicle ? ` · ${reservation.vehicle.licensePlate}` : '';
+            const body = `${reservation.parking.title} · ${schedule}${vehicle}`;
+            return [
+              this.notifications.sendReservationReminder(reservation.userId, 'Próxima reserva', body, reservation.id),
+              this.notifications.sendReservationReminder(reservation.parking.ownerId, 'Próxima reserva', body, reservation.id),
+            ];
+          }));
+        }
       }
   }

@@ -89,6 +89,12 @@ import {
     }
 
     @UseGuards(JwtAuthGuard)
+    @Get(':id/reservations')
+    reservations(@Req() request: Request, @Param('id') id: string) {
+      return this.parkingsService.findReservations(request.user!.userId, Number(id));
+    }
+
+    @UseGuards(JwtAuthGuard)
     @Patch(':id')
     update(
       @Req() request: Request,

@@ -12,11 +12,13 @@ import { Prisma } from '@prisma/client';
 import { UpdateParkingActiveDto } from './dto/update-parking-active.dto';
 import { ReservationStatus } from '@prisma/client';
 import { GeocodeParkingAddressDto } from './dto/geocode-parking-address.dto';
+import { ReservationsService } from '../reservations/reservations.service';
 @Injectable()
 export class ParkingsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly configService: ConfigService,
+    private readonly reservationsService: ReservationsService,
   ) {}
 
   async geocodeAddress({
@@ -140,6 +142,9 @@ export class ParkingsService {
       where: { ownerId },
       orderBy: { createdAt: 'desc' },
     });
+  }
+  async findReservations(ownerId: number, parkingId: number) {
+    return this.reservationsService.findForParking(ownerId, parkingId);
   }
   async findOne(id: number) {
     const parking = await this.prisma.parking.findUnique({
