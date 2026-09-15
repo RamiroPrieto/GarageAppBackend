@@ -173,9 +173,7 @@ import { NotificationsService } from '../notifications/notifications.service';
   async findAll(userId: number) {
         await this.completeEndedReservations();
         return this.prisma.reservation.findMany({
-          where: {
-            userId,
-          },
+          where: { OR: [{ userId }, { parking: { ownerId: userId } }] },
           include: {
             parking: {
               include: {
@@ -188,6 +186,7 @@ import { NotificationsService } from '../notifications/notifications.service';
             },
             vehicle: true,
             payment: true,
+            user: { select: { id: true, firstName: true, lastName: true, email: true } },
           },
           orderBy: {
             startDatetime: 'desc',
@@ -294,20 +293,20 @@ import { NotificationsService } from '../notifications/notifications.service';
       }
 
       async confirmCustomerStart(userId: number, reservationId: number) {
-        const reservation = await this.prisma.reservation.findFirst({ where: { id: reservationId, userId } });
+        const reservation = await this.prisma.reservation.findFirst({ where: { id: reservationId, userId }, include: { parking: true } });
         if (!reservation) throw new NotFoundException('Reserva no encontrada');
         return this.confirmStart(reservation, 'customer');
       }
 
       async confirmOwnerStart(userId: number, reservationId: number) {
         const reservation = await this.prisma.reservation.findFirst({
-          where: { id: reservationId, parking: { ownerId: userId } },
+          where: { id: reservationId, parking: { ownerId: userId } }, include: { parking: true },
         });
         if (!reservation) throw new NotFoundException('Reserva no encontrada');
         return this.confirmStart(reservation, 'owner');
       }
 
-      private async confirmStart(reservation: { id: number; status: string; endDatetime: Date; customerStartedAt: Date | null; ownerStartedAt: Date | null }, role: 'customer' | 'owner') {
+      private async confirmStart(reservation: { id: number; userId: number; status: string; endDatetime: Date; startDatetime: Date; customerStartedAt: Date | null; ownerStartedAt: Date | null; parking: { ownerId: number } }, role: 'customer' | 'owner') {
         if (reservation.status !== 'CONFIRMED') {
           throw new BadRequestException('La reserva no está lista para iniciarse');
         }
@@ -316,16 +315,26 @@ import { NotificationsService } from '../notifications/notifications.service';
           throw new BadRequestException('La reserva ya finalizó');
         }
 
+        if (reservation.startDatetime.getTime() - Date.now() > 10 * 60 * 1000) {
+          throw new BadRequestException('La reserva solo puede iniciarse 10 minutos antes de su horario');
+        }
+
         const now = new Date();
-        const customerStartedAt = role === 'customer' ? reservation.customerStartedAt ?? now : reservation.customerStartedAt;
-        const ownerStartedAt = role === 'owner' ? reservation.ownerStartedAt ?? now : reservation.ownerStartedAt;
-        return this.prisma.reservation.update({
+        const startedReservation = await this.prisma.reservation.update({
           where: { id: reservation.id },
           data: {
-            ...(role === 'customer' ? { customerStartedAt } : { ownerStartedAt }),
-            ...(customerStartedAt && ownerStartedAt ? { status: 'ACTIVE', startedAt: now } : {}),
+            ...(role === 'customer' ? { customerStartedAt: reservation.customerStartedAt ?? now } : { ownerStartedAt: reservation.ownerStartedAt ?? now }),
           },
+          include: { parking: true, vehicle: true, user: { select: { id: true, firstName: true, lastName: true, email: true } }, payment: true },
         });
+        if (startedReservation.customerStartedAt && startedReservation.ownerStartedAt) {
+          return this.prisma.reservation.update({
+            where: { id: reservation.id },
+            data: { status: 'ACTIVE', startedAt: startedReservation.startedAt ?? now },
+            include: { parking: true, vehicle: true, user: { select: { id: true, firstName: true, lastName: true, email: true } }, payment: true },
+          });
+        }
+        return startedReservation;
       }
 
       @Cron('0 * * * * *')
