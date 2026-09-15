@@ -7,7 +7,7 @@ import {
     IsString,
   } from 'class-validator';
   
-  import { ParkingType } from '@prisma/client';
+  import { Currency, ParkingType } from '@prisma/client';
   
   export class UpdateParkingDto {
     @IsOptional()
@@ -48,7 +48,11 @@ import {
   
     @IsOptional()
     @IsNumber()
-    pricePerDay?: number;
+  pricePerDay?: number;
+
+  @IsOptional()
+  @IsEnum(Currency)
+  currency?: Currency;
   
     @IsOptional()
     @IsNumber()

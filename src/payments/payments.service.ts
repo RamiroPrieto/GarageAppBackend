@@ -192,7 +192,7 @@ import {
       const paymentIntent =
         await this.stripe.paymentIntents.create({
           amount: amountInCents,
-          currency: 'eur',
+          currency: reservation.currency.toLowerCase() as 'eur' | 'usd',
     
           customer: customerId,
     
@@ -220,7 +220,7 @@ import {
           payerUserId: userId,
     
           amount: reservation.totalPrice,
-          currency: 'EUR',
+          currency: reservation.currency,
     
           commission,
           ownerAmount,

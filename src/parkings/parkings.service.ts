@@ -113,6 +113,7 @@ export class ParkingsService {
 
         pricePerHour: createParkingDto.pricePerHour,
         pricePerDay: createParkingDto.pricePerDay,
+        currency: createParkingDto.currency ?? 'EUR',
 
         maxHeight: createParkingDto.maxHeight,
         maxWidth: createParkingDto.maxWidth,
@@ -229,6 +230,7 @@ export class ParkingsService {
         longitude: number;
         pricePerHour: number;
         pricePerDay: number | null;
+        currency: string;
         maxHeight: number | null;
         maxWidth: number | null;
         covered: boolean;

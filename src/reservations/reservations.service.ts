@@ -162,6 +162,7 @@ import { NotificationsService } from '../notifications/notifications.service';
             endDatetime: end,
       
             totalPrice,
+            currency: parking.currency,
       
             status: 'PENDING',
       

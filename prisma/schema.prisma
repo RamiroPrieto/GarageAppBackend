@@ -38,6 +38,11 @@ enum PaymentStatus {
   REFUNDED
 }
 
+enum Currency {
+  EUR
+  USD
+}
+
 // MODELS
 
 model User {
@@ -132,6 +137,7 @@ model Parking {
 
   pricePerHour Decimal
   pricePerDay  Decimal?
+  currency     Currency @default(EUR)
 
   maxHeight Decimal?
   maxWidth  Decimal?
@@ -195,6 +201,7 @@ model Reservation {
   endDatetime DateTime
 
   totalPrice Decimal
+  currency   Currency
 
   status ReservationStatus @default(PENDING)
 
