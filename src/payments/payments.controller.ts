@@ -12,6 +12,8 @@ import type { Request } from 'express';
 import { CreatePaymentDto } from './dto/create-payment.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PaymentsService } from './payments.service';
+import { CreateCreditPurchaseDto } from './dto/create-credit-purchase.dto';
+import { PayReservationWithCreditsDto } from './dto/pay-reservation-with-credits.dto';
 
 @Controller('payments')
 export class PaymentsController {
@@ -36,6 +38,22 @@ export class PaymentsController {
       request.user!.userId,
       createPaymentDto,
     );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('credits/purchase')
+  createCreditPurchase(@Req() request: Request, @Body() dto: CreateCreditPurchaseDto) {
+    return this.paymentsService.createCreditPurchase(request.user!.userId, dto);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post(':reservationId/credits')
+  payReservationWithCredits(
+    @Req() request: Request,
+    @Param('reservationId') reservationId: string,
+    @Body() dto: PayReservationWithCreditsDto,
+  ) {
+    return this.paymentsService.payReservationWithCredits(request.user!.userId, Number(reservationId), dto.idempotencyKey);
   }
 
   @UseGuards(JwtAuthGuard)

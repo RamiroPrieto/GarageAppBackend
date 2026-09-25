@@ -18,6 +18,7 @@ export class UsersService {
         phone: true,
         profileImage: true,
         emailVerified: true,
+        creditBalance: true,
         createdAt: true,
         updatedAt: true,
       },
