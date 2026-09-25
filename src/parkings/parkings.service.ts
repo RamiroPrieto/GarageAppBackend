@@ -94,6 +94,65 @@ export class ParkingsService {
     return { latitude, longitude };
   }
 
+  async autocompletePlaces(input: string): Promise<Array<{ placeId: string; description: string }>> {
+    const apiKey = this.getGoogleMapsServerKey();
+    let response: Response;
+    try {
+      response = await fetch('https://places.googleapis.com/v1/places:autocomplete', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Goog-Api-Key': apiKey,
+          'X-Goog-FieldMask': 'suggestions.placePrediction.placeId,suggestions.placePrediction.text.text',
+        },
+        body: JSON.stringify({ input, includedPrimaryTypes: ['street_address', 'premise', 'route'] }),
+        signal: AbortSignal.timeout(10_000),
+      });
+    } catch {
+      throw new ServiceUnavailableException('No pudimos consultar las sugerencias de direcciones');
+    }
+    if (!response.ok) throw new ServiceUnavailableException('No pudimos consultar las sugerencias de direcciones');
+
+    const payload = await response.json() as {
+      suggestions?: Array<{ placePrediction?: { placeId?: string; text?: { text?: string } } }>;
+    };
+    return (payload.suggestions ?? []).flatMap(({ placePrediction }) => {
+      const placeId = placePrediction?.placeId;
+      const description = placePrediction?.text?.text;
+      return typeof placeId === 'string' && typeof description === 'string' ? [{ placeId, description }] : [];
+    });
+  }
+
+  async getPlaceDetails(placeId: string): Promise<{ latitude: number; longitude: number; formattedAddress: string }> {
+    const apiKey = this.getGoogleMapsServerKey();
+    let response: Response;
+    try {
+      response = await fetch(`https://places.googleapis.com/v1/places/${encodeURIComponent(placeId)}`, {
+        headers: {
+          'X-Goog-Api-Key': apiKey,
+          'X-Goog-FieldMask': 'location,formattedAddress',
+        },
+        signal: AbortSignal.timeout(10_000),
+      });
+    } catch {
+      throw new ServiceUnavailableException('No pudimos obtener esa dirección');
+    }
+    if (!response.ok) throw new NotFoundException('No pudimos obtener esa dirección');
+    const payload = await response.json() as { location?: { latitude?: number; longitude?: number }; formattedAddress?: string };
+    const latitude = payload.location?.latitude;
+    const longitude = payload.location?.longitude;
+    if (typeof latitude !== 'number' || typeof longitude !== 'number' || !Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+      throw new NotFoundException('No pudimos obtener esa dirección');
+    }
+    return { latitude, longitude, formattedAddress: payload.formattedAddress ?? placeId };
+  }
+
+  private getGoogleMapsServerKey() {
+    const apiKey = this.configService.get<string>('GOOGLE_MAPS_GEOCODING_API_KEY');
+    if (!apiKey) throw new ServiceUnavailableException('El servicio de ubicación no está configurado');
+    return apiKey;
+  }
+
   async create(
     ownerId: number,
     createParkingDto: CreateParkingDto,

@@ -21,6 +21,8 @@ import {
   import { NearbyParkingsDto } from './dto/nearby-parkings.dto';
   import { UpdateParkingActiveDto } from './dto/update-parking-active.dto';
   import { GeocodeParkingAddressDto } from './dto/geocode-parking-address.dto';
+  import { PlaceAutocompleteDto } from './dto/place-autocomplete.dto';
+  import { PlaceDetailsDto } from './dto/place-details.dto';
   
   @Controller('parkings')
   export class ParkingsController {
@@ -44,6 +46,18 @@ import {
     @Post('geocode')
     geocode(@Body() geocodeParkingAddressDto: GeocodeParkingAddressDto) {
       return this.parkingsService.geocodeAddress(geocodeParkingAddressDto);
+    }
+
+    @UseGuards(JwtAuthGuard)
+    @Post('places/autocomplete')
+    autocompletePlaces(@Body() dto: PlaceAutocompleteDto) {
+      return this.parkingsService.autocompletePlaces(dto.input);
+    }
+
+    @UseGuards(JwtAuthGuard)
+    @Post('places/details')
+    placeDetails(@Body() dto: PlaceDetailsDto) {
+      return this.parkingsService.getPlaceDetails(dto.placeId);
     }
 
     @Get()

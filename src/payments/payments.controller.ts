@@ -6,6 +6,7 @@ import {
   UseGuards,
   Body,
   Headers,
+  Get,
 } from '@nestjs/common';
 
 import type { Request } from 'express';
@@ -44,6 +45,15 @@ export class PaymentsController {
   @Post('credits/purchase')
   createCreditPurchase(@Req() request: Request, @Body() dto: CreateCreditPurchaseDto) {
     return this.paymentsService.createCreditPurchase(request.user!.userId, dto);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('credits/purchases/:paymentIntentId')
+  getCreditPurchaseStatus(
+    @Req() request: Request,
+    @Param('paymentIntentId') paymentIntentId: string,
+  ) {
+    return this.paymentsService.getCreditPurchaseStatus(request.user!.userId, paymentIntentId);
   }
 
   @UseGuards(JwtAuthGuard)
