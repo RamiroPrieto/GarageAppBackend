@@ -152,7 +152,7 @@ import { NotificationsService } from '../notifications/notifications.service';
           now.getTime() + 10 * 60 * 1000,
         );
       
-        return this.prisma.reservation.create({
+        const reservation = await this.prisma.reservation.create({
           data: {
             parkingId,
             userId,
@@ -169,6 +169,8 @@ import { NotificationsService } from '../notifications/notifications.service';
             expiresAt,
           },
         });
+        console.log('[reservations] Reservation created', { reservationId: reservation.id, userId, parkingId });
+        return reservation;
       }
   async findAll(userId: number) {
         await this.completeEndedReservations();

@@ -70,6 +70,7 @@ export class PaymentsService {
         paymentMethod: 'STRIPE', stripePaymentIntentId: paymentIntent.id, status: 'PENDING',
       },
     });
+    console.log('[payments] PaymentIntent created', { paymentIntentId: paymentIntent.id, reservationId: reservation.id });
     return { clientSecret: paymentIntent.client_secret };
   }
 
@@ -126,7 +127,10 @@ export class PaymentsService {
           where: { id: userId, creditBalance: { gte: credits } },
           data: { creditBalance: { decrement: credits } },
         });
-        if (debit.count !== 1) throw new BadRequestException('Créditos insuficientes');
+        if (debit.count !== 1) {
+          // The transaction rolls back, so no balance or credit transaction changes.
+          throw new BadRequestException({ message: 'Créditos insuficientes', code: 'INSUFFICIENT_CREDITS' });
+        }
 
         const user = await tx.user.findUniqueOrThrow({ where: { id: userId }, select: { creditBalance: true } });
         await tx.creditTransaction.create({
@@ -143,6 +147,17 @@ export class PaymentsService {
       if (prismaCode === 'P2002') {
         const reservation = await this.prisma.reservation.findFirst({ where: { id: reservationId, userId } });
         if (reservation) return reservation;
+      }
+      const response = error instanceof BadRequestException
+        ? error.getResponse()
+        : (error as { response?: { code?: string } }).response;
+      if (typeof response === 'object' && response !== null && (response as { code?: string }).code === 'INSUFFICIENT_CREDITS') {
+        // Do not leave the pre-payment hold occupying the parking slot.
+        await this.prisma.reservation.updateMany({
+          where: { id: reservationId, userId, status: 'PENDING' },
+          data: { status: 'CANCELLED' },
+        });
+        console.log('[payments] Credit payment rejected: insufficient credits', { reservationId, userId });
       }
       throw error;
     }
@@ -211,9 +226,9 @@ export class PaymentsService {
   async confirmPayment(userId: number, reservationId: number) {
     const payment = await this.prisma.payment.findFirst({ where: { reservationId, payerUserId: userId } });
     if (!payment) throw new NotFoundException('Pago no encontrado');
-    const intent = await this.stripe.paymentIntents.retrieve(payment.stripePaymentIntentId);
-    if (intent.status !== 'succeeded') throw new BadRequestException('El pago no fue completado');
-    await this.markPaymentSucceeded(payment.id);
+    // Payment and reservation transitions are owned by the verified Stripe
+    // webhook. This endpoint is retained for compatibility as a read-only
+    // status refresh and must not become a second confirmation path.
     return this.prisma.reservation.findFirstOrThrow({ where: { id: reservationId, userId } });
   }
 
@@ -221,8 +236,9 @@ export class PaymentsService {
     const payment = await this.prisma.payment.findUniqueOrThrow({ where: { id: paymentId } });
     await this.prisma.$transaction([
       this.prisma.payment.update({ where: { id: payment.id }, data: { status: 'SUCCEEDED' } }),
-      this.prisma.reservation.update({ where: { id: payment.reservationId }, data: { status: 'CONFIRMED' } }),
+      this.prisma.reservation.updateMany({ where: { id: payment.reservationId, status: 'PENDING' }, data: { status: 'CONFIRMED' } }),
     ]);
+    console.log('[payments] Payment confirmed', { paymentId: payment.id, reservationId: payment.reservationId });
   }
 
   private assertPendingReservation(reservation: { status: string; expiresAt: Date | null }) {
