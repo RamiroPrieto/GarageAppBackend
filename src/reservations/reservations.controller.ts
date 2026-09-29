@@ -43,8 +43,10 @@ import {
 
     @UseGuards(JwtAuthGuard)
     @Get('upcoming/home')
-    findUpcomingForHome(@Req() request: Request) {
-      return this.reservationsService.findUpcomingForHome(request.user!.userId);
+    async findUpcomingForHome(@Req() request: Request) {
+      // Nest serializes a top-level null as an empty 200 response. Wrap it so
+      // clients always receive valid JSON, including when there is no booking.
+      return { reservation: await this.reservationsService.findUpcomingForHome(request.user!.userId) };
     }
 
     @UseGuards(JwtAuthGuard)

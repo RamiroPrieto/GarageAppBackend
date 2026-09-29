@@ -278,7 +278,7 @@ import { NotificationsService } from '../notifications/notifications.service';
       async findUpcomingForHome(userId: number) {
         await this.completeEndedReservations();
         const now = new Date();
-        return this.prisma.reservation.findFirst({
+        const reservation = await this.prisma.reservation.findFirst({
           where: {
             status: { in: ['CONFIRMED', 'ACTIVE'] },
             startDatetime: { lte: new Date(now.getTime() + 10 * 60 * 1000) },
@@ -292,6 +292,13 @@ import { NotificationsService } from '../notifications/notifications.service';
           },
           orderBy: { startDatetime: 'asc' },
         });
+        console.log('[reservations] Upcoming reservation lookup', {
+          userId,
+          found: Boolean(reservation),
+          reservationId: reservation?.id,
+          status: reservation?.status,
+        });
+        return reservation;
       }
 
       async confirmCustomerStart(userId: number, reservationId: number) {
