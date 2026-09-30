@@ -187,7 +187,7 @@ export class PaymentsService {
   }
 
   async handleWebhook(rawBody: Buffer, signature: string) {
-    console.log('[credits] Webhook received', { signatureProvided: Boolean(signature), bodyLength: rawBody?.length ?? 0 });
+    console.log('[credits] WEBHOOK RECEIVED', { signatureProvided: Boolean(signature), rawBodyAvailable: Buffer.isBuffer(rawBody), bodyLength: rawBody?.length ?? 0 });
     if (!signature) {
       console.warn('[stripe-webhook] Firma ausente');
       throw new BadRequestException('Firma de Stripe ausente');
@@ -205,9 +205,11 @@ export class PaymentsService {
       throw new BadRequestException('Firma de Stripe inválida');
     }
     console.log('[stripe-webhook] Webhook recibido', { eventId: event.id, eventType: event.type, mode: event.livemode ? 'live' : 'test' });
+    console.log('[credits] WEBHOOK EVENT TYPE:', event.type);
     if (event.type === 'payment_intent.succeeded') {
       const intent = event.data.object as Stripe.PaymentIntent;
-      console.log('[credits] PaymentIntent succeeded', { paymentIntentId: intent.id, mode: intent.livemode ? 'live' : 'test' });
+      console.log('[credits] PAYMENT INTENT SUCCEEDED', { mode: intent.livemode ? 'live' : 'test' });
+      console.log('[credits] PAYMENT INTENT ID:', intent.id);
       console.log('[stripe-webhook] PaymentIntent confirmado', { paymentIntentId: intent.id });
       if (intent.livemode !== (this.stripeMode() === 'live')) {
         console.warn('[stripe-webhook] Modo de Stripe inconsistente', {
@@ -219,7 +221,8 @@ export class PaymentsService {
       }
       const creditPurchase = await this.prisma.creditPurchase.findUnique({ where: { stripePaymentIntentId: intent.id } });
       if (creditPurchase) {
-        console.log('[credits] Credit purchase identified', { paymentIntentId: intent.id, userId: creditPurchase.userId, credits: creditPurchase.credits });
+        console.log('[credits] CREDIT PURCHASE FOUND', { paymentIntentId: intent.id, userId: creditPurchase.userId });
+        console.log('[credits] CREDITS TO ADD:', creditPurchase.credits);
         console.log('[credits] Compra identificada', { paymentIntentId: intent.id, userId: creditPurchase.userId, credits: creditPurchase.credits });
         if (!this.matchesCreditPurchaseMetadata(intent, creditPurchase)) {
           console.warn('[credits] Metadata de PaymentIntent inválida', { paymentIntentId: intent.id });
@@ -258,8 +261,8 @@ export class PaymentsService {
       await tx.creditTransaction.create({
         data: { userId: purchase.userId, type: 'PURCHASE', amount: purchase.credits, balanceAfter: user.creditBalance, stripePaymentIntentId: paymentIntentId },
       });
-      console.log('[credits] Credits credited', { paymentIntentId, userId: purchase.userId, credits: purchase.credits });
-      console.log('[credits] New balance', { userId: purchase.userId, creditBalance: user.creditBalance });
+      console.log('[credits] CREDITS CREDITED', { paymentIntentId, userId: purchase.userId, credits: purchase.credits });
+      console.log('[credits] NEW BALANCE:', user.creditBalance);
       console.log('[credits] Créditos acreditados', { paymentIntentId, userId: purchase.userId, credits: purchase.credits, creditBalance: user.creditBalance });
     }, { isolationLevel: 'Serializable' });
   }
