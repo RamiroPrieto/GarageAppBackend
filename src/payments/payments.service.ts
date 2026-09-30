@@ -85,9 +85,18 @@ export class PaymentsService {
       automatic_payment_methods: { enabled: true },
       metadata: { kind: 'CREDIT_PURCHASE', userId: userId.toString(), credits: dto.credits.toString() },
     });
-    await this.prisma.creditPurchase.create({
-      data: { userId, credits: dto.credits, amountUsd: dto.credits / CREDITS_PER_USD, stripePaymentIntentId: paymentIntent.id },
-    });
+    try {
+      await this.prisma.creditPurchase.create({
+        data: { userId, credits: dto.credits, amountUsd: dto.credits / CREDITS_PER_USD, stripePaymentIntentId: paymentIntent.id },
+      });
+    } catch (error) {
+      // Never hand an unmapped PaymentIntent to the app: the webhook could not
+      // safely identify who should receive its credits. Cancellation is best
+      // effort because Stripe may already have moved it to a final state.
+      await this.stripe.paymentIntents.cancel(paymentIntent.id).catch(() => undefined);
+      console.error('[credits] No se pudo registrar la compra pendiente', { paymentIntentId: paymentIntent.id, userId });
+      throw error;
+    }
     console.log('[credits] PaymentIntent creado', { paymentIntentId: paymentIntent.id, userId, credits: dto.credits, mode: this.stripeMode() });
     return { clientSecret: paymentIntent.client_secret, paymentIntentId: paymentIntent.id };
   }
@@ -168,9 +177,14 @@ export class PaymentsService {
       console.warn('[stripe-webhook] Firma ausente');
       throw new BadRequestException('Firma de Stripe ausente');
     }
+    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+    if (!webhookSecret) {
+      console.error('[stripe-webhook] STRIPE_WEBHOOK_SECRET no está configurado');
+      throw new BadRequestException('Webhook de Stripe no configurado');
+    }
     let event: Stripe.Event;
     try {
-      event = this.stripe.webhooks.constructEvent(rawBody, signature, process.env.STRIPE_WEBHOOK_SECRET!);
+      event = this.stripe.webhooks.constructEvent(rawBody, signature, webhookSecret);
     } catch {
       console.warn('[stripe-webhook] Firma inválida');
       throw new BadRequestException('Firma de Stripe inválida');
@@ -179,6 +193,14 @@ export class PaymentsService {
     if (event.type === 'payment_intent.succeeded') {
       const intent = event.data.object as Stripe.PaymentIntent;
       console.log('[stripe-webhook] PaymentIntent confirmado', { paymentIntentId: intent.id });
+      if (intent.livemode !== (this.stripeMode() === 'live')) {
+        console.warn('[stripe-webhook] Modo de Stripe inconsistente', {
+          paymentIntentId: intent.id,
+          paymentIntentMode: intent.livemode ? 'live' : 'test',
+          configuredMode: this.stripeMode(),
+        });
+        throw new BadRequestException('El evento de Stripe no coincide con el modo configurado');
+      }
       const creditPurchase = await this.prisma.creditPurchase.findUnique({ where: { stripePaymentIntentId: intent.id } });
       if (creditPurchase) {
         console.log('[credits] Compra identificada', { paymentIntentId: intent.id, userId: creditPurchase.userId, credits: creditPurchase.credits });
