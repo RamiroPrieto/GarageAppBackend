@@ -74,7 +74,17 @@ export class PaymentsService {
     return { clientSecret: paymentIntent.client_secret };
   }
 
-  async createCreditPurchase(userId: number, dto: CreateCreditPurchaseDto) {
+  async createCreditPurchase(userId: number, dto: CreateCreditPurchaseDto, idempotencyKey?: string) {
+    if (!idempotencyKey || idempotencyKey.length > 200) {
+      throw new BadRequestException('Se requiere una clave de idempotencia válida');
+    }
+    const existingPurchase = await this.prisma.creditPurchase.findUnique({ where: { idempotencyKey } });
+    if (existingPurchase) {
+      if (existingPurchase.userId !== userId || existingPurchase.credits !== dto.credits) {
+        throw new BadRequestException('La clave de idempotencia pertenece a otra compra');
+      }
+      return this.creditPurchaseResponse(existingPurchase.stripePaymentIntentId);
+    }
     if (dto.credits > 1_000_000) throw new BadRequestException('La cantidad de créditos es demasiado alta');
     const { customerId } = await this.getStripeCustomer(userId);
     // 100 credits = USD 1, so a credit has exactly the value of one USD cent.
@@ -83,13 +93,17 @@ export class PaymentsService {
       currency: 'usd',
       customer: customerId,
       automatic_payment_methods: { enabled: true },
-      metadata: { kind: 'CREDIT_PURCHASE', userId: userId.toString(), credits: dto.credits.toString() },
-    });
+      metadata: { kind: 'CREDIT_PURCHASE', userId: userId.toString(), credits: dto.credits.toString(), creditPurchaseKey: idempotencyKey },
+    }, { idempotencyKey: `credit-purchase:${idempotencyKey}` });
     try {
       await this.prisma.creditPurchase.create({
-        data: { userId, credits: dto.credits, amountUsd: dto.credits / CREDITS_PER_USD, stripePaymentIntentId: paymentIntent.id },
+        data: { userId, idempotencyKey, credits: dto.credits, amountUsd: dto.credits / CREDITS_PER_USD, stripePaymentIntentId: paymentIntent.id },
       });
     } catch (error) {
+      const duplicate = await this.prisma.creditPurchase.findUnique({ where: { idempotencyKey } });
+      if (duplicate && duplicate.userId === userId && duplicate.credits === dto.credits) {
+        return this.creditPurchaseResponse(duplicate.stripePaymentIntentId);
+      }
       // Never hand an unmapped PaymentIntent to the app: the webhook could not
       // safely identify who should receive its credits. Cancellation is best
       // effort because Stripe may already have moved it to a final state.
@@ -98,7 +112,7 @@ export class PaymentsService {
       throw error;
     }
     console.log('[credits] PaymentIntent creado', { paymentIntentId: paymentIntent.id, userId, credits: dto.credits, mode: this.stripeMode() });
-    return { clientSecret: paymentIntent.client_secret, paymentIntentId: paymentIntent.id };
+    return this.creditPurchaseResponse(paymentIntent.id, paymentIntent.client_secret);
   }
 
   async getCreditPurchaseStatus(userId: number, paymentIntentId: string) {
@@ -173,6 +187,7 @@ export class PaymentsService {
   }
 
   async handleWebhook(rawBody: Buffer, signature: string) {
+    console.log('[credits] Webhook received', { signatureProvided: Boolean(signature), bodyLength: rawBody?.length ?? 0 });
     if (!signature) {
       console.warn('[stripe-webhook] Firma ausente');
       throw new BadRequestException('Firma de Stripe ausente');
@@ -192,6 +207,7 @@ export class PaymentsService {
     console.log('[stripe-webhook] Webhook recibido', { eventId: event.id, eventType: event.type, mode: event.livemode ? 'live' : 'test' });
     if (event.type === 'payment_intent.succeeded') {
       const intent = event.data.object as Stripe.PaymentIntent;
+      console.log('[credits] PaymentIntent succeeded', { paymentIntentId: intent.id, mode: intent.livemode ? 'live' : 'test' });
       console.log('[stripe-webhook] PaymentIntent confirmado', { paymentIntentId: intent.id });
       if (intent.livemode !== (this.stripeMode() === 'live')) {
         console.warn('[stripe-webhook] Modo de Stripe inconsistente', {
@@ -203,6 +219,7 @@ export class PaymentsService {
       }
       const creditPurchase = await this.prisma.creditPurchase.findUnique({ where: { stripePaymentIntentId: intent.id } });
       if (creditPurchase) {
+        console.log('[credits] Credit purchase identified', { paymentIntentId: intent.id, userId: creditPurchase.userId, credits: creditPurchase.credits });
         console.log('[credits] Compra identificada', { paymentIntentId: intent.id, userId: creditPurchase.userId, credits: creditPurchase.credits });
         if (!this.matchesCreditPurchaseMetadata(intent, creditPurchase)) {
           console.warn('[credits] Metadata de PaymentIntent inválida', { paymentIntentId: intent.id });
@@ -241,6 +258,8 @@ export class PaymentsService {
       await tx.creditTransaction.create({
         data: { userId: purchase.userId, type: 'PURCHASE', amount: purchase.credits, balanceAfter: user.creditBalance, stripePaymentIntentId: paymentIntentId },
       });
+      console.log('[credits] Credits credited', { paymentIntentId, userId: purchase.userId, credits: purchase.credits });
+      console.log('[credits] New balance', { userId: purchase.userId, creditBalance: user.creditBalance });
       console.log('[credits] Créditos acreditados', { paymentIntentId, userId: purchase.userId, credits: purchase.credits, creditBalance: user.creditBalance });
     }, { isolationLevel: 'Serializable' });
   }
@@ -281,10 +300,17 @@ export class PaymentsService {
     return Math.ceil(totalPrice * usdPerEur * CREDITS_PER_USD);
   }
 
-  private matchesCreditPurchaseMetadata(intent: Stripe.PaymentIntent, purchase: { userId: number; credits: number }) {
+  private matchesCreditPurchaseMetadata(intent: Stripe.PaymentIntent, purchase: { userId: number; credits: number; idempotencyKey: string }) {
     return intent.metadata.kind === 'CREDIT_PURCHASE'
       && intent.metadata.userId === purchase.userId.toString()
-      && intent.metadata.credits === purchase.credits.toString();
+      && intent.metadata.credits === purchase.credits.toString()
+      && intent.metadata.creditPurchaseKey === purchase.idempotencyKey;
+  }
+
+  private async creditPurchaseResponse(paymentIntentId: string, knownClientSecret?: string | null) {
+    const clientSecret = knownClientSecret ?? (await this.stripe.paymentIntents.retrieve(paymentIntentId)).client_secret;
+    if (!clientSecret) throw new BadRequestException('No se pudo iniciar el pago de créditos');
+    return { clientSecret, paymentIntentId };
   }
 
   private stripeMode() {

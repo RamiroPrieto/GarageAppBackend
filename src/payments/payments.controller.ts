@@ -43,8 +43,8 @@ export class PaymentsController {
 
   @UseGuards(JwtAuthGuard)
   @Post('credits/purchase')
-  createCreditPurchase(@Req() request: Request, @Body() dto: CreateCreditPurchaseDto) {
-    return this.paymentsService.createCreditPurchase(request.user!.userId, dto);
+  createCreditPurchase(@Req() request: Request, @Body() dto: CreateCreditPurchaseDto, @Headers('idempotency-key') idempotencyKey: string) {
+    return this.paymentsService.createCreditPurchase(request.user!.userId, dto, idempotencyKey);
   }
 
   @UseGuards(JwtAuthGuard)

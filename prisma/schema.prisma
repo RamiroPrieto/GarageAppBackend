@@ -244,6 +244,7 @@ model Reservation {
 model CreditPurchase {
   id Int @id @default(autoincrement())
   userId Int
+  idempotencyKey String @unique
   credits Int
   amountUsd Decimal
   stripePaymentIntentId String @unique
