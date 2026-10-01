@@ -116,11 +116,31 @@ export class PaymentsService {
   }
 
   async getCreditPurchaseStatus(userId: number, paymentIntentId: string) {
-    const purchase = await this.prisma.creditPurchase.findFirst({
+    let purchase = await this.prisma.creditPurchase.findFirst({
       where: { stripePaymentIntentId: paymentIntentId, userId },
       select: { status: true, credits: true, stripePaymentIntentId: true, user: { select: { creditBalance: true } } },
     });
     if (!purchase) throw new NotFoundException('Compra de créditos no encontrada');
+    if (purchase.status === 'PENDING') {
+      const intent = await this.stripe.paymentIntents.retrieve(paymentIntentId);
+      if (intent.status === 'succeeded') {
+        if (intent.livemode !== (this.stripeMode() === 'live')) {
+          throw new BadRequestException('El pago no coincide con el modo de Stripe configurado');
+        }
+        const pendingPurchase = await this.prisma.creditPurchase.findUnique({
+          where: { stripePaymentIntentId: paymentIntentId },
+        });
+        if (!pendingPurchase || pendingPurchase.userId !== userId || !this.matchesCreditPurchaseMetadata(intent, pendingPurchase)) {
+          throw new BadRequestException('Metadata de compra de créditos inválida');
+        }
+        await this.creditPurchaseSucceeded(paymentIntentId);
+        purchase = await this.prisma.creditPurchase.findFirstOrThrow({
+          where: { stripePaymentIntentId: paymentIntentId, userId },
+          select: { status: true, credits: true, stripePaymentIntentId: true, user: { select: { creditBalance: true } } },
+        });
+      }
+    }
+
     return {
       paymentIntentId: purchase.stripePaymentIntentId,
       status: purchase.status,
