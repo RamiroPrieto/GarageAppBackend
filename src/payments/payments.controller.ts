@@ -7,6 +7,7 @@ import {
   Body,
   Headers,
   Get,
+  Query,
 } from '@nestjs/common';
 
 import type { Request } from 'express';
@@ -45,6 +46,12 @@ export class PaymentsController {
   @Post('credits/purchase')
   createCreditPurchase(@Req() request: Request, @Body() dto: CreateCreditPurchaseDto, @Headers('idempotency-key') idempotencyKey: string) {
     return this.paymentsService.createCreditPurchase(request.user!.userId, dto, idempotencyKey);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('credits/quote')
+  getCreditQuote(@Query('parkingId') parkingId: string, @Query('startDatetime') startDatetime: string, @Query('endDatetime') endDatetime: string) {
+    return this.paymentsService.getCreditQuote(Number(parkingId), startDatetime, endDatetime);
   }
 
   @UseGuards(JwtAuthGuard)

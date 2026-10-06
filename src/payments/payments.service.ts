@@ -149,6 +149,21 @@ export class PaymentsService {
     };
   }
 
+  async getCreditQuote(parkingId: number, startDatetime: string, endDatetime: string) {
+    const start = new Date(startDatetime);
+    const end = new Date(endDatetime);
+    if (!Number.isInteger(parkingId) || Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end <= start) {
+      throw new BadRequestException('Datos de reserva inválidos');
+    }
+    const parking = await this.prisma.parking.findUnique({
+      where: { id: parkingId },
+      select: { pricePerHour: true, currency: true },
+    });
+    if (!parking) throw new NotFoundException('Parking no encontrado');
+    const totalPrice = (end.getTime() - start.getTime()) / 3_600_000 * Number(parking.pricePerHour);
+    return { credits: this.calculateCreditsForReservation(totalPrice, parking.currency) };
+  }
+
   async payReservationWithCredits(userId: number, reservationId: number, _idempotencyKey?: string) {
     try {
       return await this.prisma.$transaction(async (tx) => {
