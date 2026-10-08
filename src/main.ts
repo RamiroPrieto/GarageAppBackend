@@ -1,5 +1,6 @@
 import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
+import { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
@@ -11,9 +12,12 @@ async function bootstrap() {
     secretKeyConfigured: Boolean(stripeSecretKey),
     webhookSecretConfigured: Boolean(process.env.STRIPE_WEBHOOK_SECRET),
   });
-  const app = await NestFactory.create(AppModule, {
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     rawBody: true,
   });
+  // Profile photos are compressed client-side data URLs. Nest keeps the raw
+  // request body enabled above, which Stripe still uses for signature checks.
+  app.useBodyParser('json', { limit: '3mb' });
   
   app.useGlobalPipes(
     new ValidationPipe({
