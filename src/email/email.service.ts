@@ -109,4 +109,12 @@ export class EmailService {
     });
     */
   }
+
+  async sendSupportEmail(user: { firstName: string; lastName: string; email: string }, subject: string, message: string) {
+    const from = process.env.EMAIL_FROM;
+    const to = process.env.SUPPORT_EMAIL_TO ?? 'ramiro.mpdev@gmail.com';
+    if (!process.env.RESEND_API_KEY || !from) throw new ServiceUnavailableException('El servicio de email no está configurado');
+    const { error } = await this.resend.emails.send({ from, to, replyTo: user.email, subject: `[GarageApp Support] ${subject}`, text: `Usuario: ${user.firstName} ${user.lastName} (${user.email})\n\n${message}` });
+    if (error) throw new ServiceUnavailableException(`No se pudo enviar el email: ${error.message}`);
+  }
 }

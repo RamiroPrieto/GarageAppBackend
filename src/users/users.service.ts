@@ -1,10 +1,12 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { UpdateProfileDto } from './dto/update-profile.dto';
+import { CreateSupportRequestDto } from './dto/create-support-request.dto';
+import { EmailService } from '../email/email.service';
 
 @Injectable()
 export class UsersService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService, private readonly emailService: EmailService) {}
 
   async getMe(userId: number) {
     return this.prisma.user.findUnique({
@@ -35,5 +37,11 @@ export class UsersService {
         profileImage: true, emailVerified: true, creditBalance: true,
       },
     });
+  }
+
+  async createSupportRequest(userId: number, dto: CreateSupportRequestDto) {
+    const user = await this.prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { firstName: true, lastName: true, email: true } });
+    await this.emailService.sendSupportEmail(user, dto.subject.trim(), dto.message.trim());
+    return { sent: true };
   }
 }
