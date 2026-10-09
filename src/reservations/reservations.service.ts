@@ -200,7 +200,7 @@ import { NotificationsService } from '../notifications/notifications.service';
         const reservation = await this.prisma.reservation.findFirst({
           where: {
             id: reservationId,
-            userId,
+            OR: [{ userId }, { parking: { ownerId: userId } }],
           },
           include: {
             parking: {
@@ -214,6 +214,7 @@ import { NotificationsService } from '../notifications/notifications.service';
             },
             vehicle: true,
             payment: true,
+            user: { select: { id: true, firstName: true, lastName: true, email: true } },
           },
         });
       
