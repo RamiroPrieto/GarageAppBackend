@@ -12,6 +12,7 @@ import { Prisma } from '@prisma/client';
 import { UpdateParkingActiveDto } from './dto/update-parking-active.dto';
 import { ReservationStatus } from '@prisma/client';
 import { GeocodeParkingAddressDto } from './dto/geocode-parking-address.dto';
+import { PlaceAutocompleteDto } from './dto/place-autocomplete.dto';
 import { ReservationsService } from '../reservations/reservations.service';
 @Injectable()
 export class ParkingsService {
@@ -94,8 +95,19 @@ export class ParkingsService {
     return { latitude, longitude };
   }
 
-  async autocompletePlaces(input: string): Promise<Array<{ placeId: string; description: string }>> {
+  async autocompletePlaces({
+    input,
+    latitude,
+    longitude,
+    languageCode,
+  }: PlaceAutocompleteDto): Promise<Array<{ placeId: string; description: string }>> {
     const apiKey = this.getGoogleMapsServerKey();
+    const hasLocationBias =
+      typeof latitude === 'number' &&
+      Number.isFinite(latitude) &&
+      typeof longitude === 'number' &&
+      Number.isFinite(longitude);
+
     let response: Response;
     try {
       response = await fetch('https://places.googleapis.com/v1/places:autocomplete', {
@@ -105,7 +117,21 @@ export class ParkingsService {
           'X-Goog-Api-Key': apiKey,
           'X-Goog-FieldMask': 'suggestions.placePrediction.placeId,suggestions.placePrediction.text.text',
         },
-        body: JSON.stringify({ input, includedPrimaryTypes: ['street_address', 'premise', 'route'] }),
+        body: JSON.stringify({
+          input,
+          includedPrimaryTypes: ['street_address', 'premise', 'route'],
+          ...(languageCode ? { languageCode } : {}),
+          ...(hasLocationBias
+            ? {
+                locationBias: {
+                  circle: {
+                    center: { latitude, longitude },
+                    radius: 50_000,
+                  },
+                },
+              }
+            : {}),
+        }),
         signal: AbortSignal.timeout(10_000),
       });
     } catch {

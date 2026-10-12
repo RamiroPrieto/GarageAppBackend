@@ -51,7 +51,7 @@ import {
     @UseGuards(JwtAuthGuard)
     @Post('places/autocomplete')
     autocompletePlaces(@Body() dto: PlaceAutocompleteDto) {
-      return this.parkingsService.autocompletePlaces(dto.input);
+      return this.parkingsService.autocompletePlaces(dto);
     }
 
     @UseGuards(JwtAuthGuard)
