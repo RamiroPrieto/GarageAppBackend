@@ -41,7 +41,13 @@ import { NotificationsService } from '../notifications/notifications.service';
             'La fecha de inicio debe ser anterior a la fecha de finalización',
           );
         }
-      
+
+        if (end.getTime() - start.getTime() < 60 * 60 * 1000) {
+          throw new BadRequestException(
+            'La reserva debe tener una duración mínima de una hora',
+          );
+        }
+
         // 2. Buscar parking
       
         const parking = await this.prisma.parking.findUnique({
