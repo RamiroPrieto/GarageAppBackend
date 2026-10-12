@@ -147,11 +147,12 @@ export class ParkingsService {
     if (!response.ok) {
       const failure = await response
         .json()
-        .catch(() => null) as { error?: { code?: number; status?: string } } | null;
+        .catch(() => null) as { error?: { code?: number; status?: string; message?: string } } | null;
       console.warn('[places] Autocomplete rejected by Google', {
         httpStatus: response.status,
         googleCode: failure?.error?.code ?? null,
         googleStatus: failure?.error?.status ?? null,
+        googleReason: failure?.error?.message ?? null,
       });
       throw new ServiceUnavailableException('No pudimos consultar las sugerencias de direcciones');
     }
