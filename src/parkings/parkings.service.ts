@@ -108,6 +108,11 @@ export class ParkingsService {
       typeof longitude === 'number' &&
       Number.isFinite(longitude);
 
+    console.log('[places] Autocomplete request', {
+      hasLocationBias,
+      languageCode: languageCode ?? 'default',
+    });
+
     let response: Response;
     try {
       response = await fetch('https://places.googleapis.com/v1/places:autocomplete', {
@@ -135,9 +140,21 @@ export class ParkingsService {
         signal: AbortSignal.timeout(10_000),
       });
     } catch {
+      console.warn('[places] Autocomplete network failure');
       throw new ServiceUnavailableException('No pudimos consultar las sugerencias de direcciones');
     }
-    if (!response.ok) throw new ServiceUnavailableException('No pudimos consultar las sugerencias de direcciones');
+
+    if (!response.ok) {
+      const failure = await response
+        .json()
+        .catch(() => null) as { error?: { code?: number; status?: string } } | null;
+      console.warn('[places] Autocomplete rejected by Google', {
+        httpStatus: response.status,
+        googleCode: failure?.error?.code ?? null,
+        googleStatus: failure?.error?.status ?? null,
+      });
+      throw new ServiceUnavailableException('No pudimos consultar las sugerencias de direcciones');
+    }
 
     const payload = await response.json() as {
       suggestions?: Array<{ placePrediction?: { placeId?: string; text?: { text?: string } } }>;
@@ -175,7 +192,10 @@ export class ParkingsService {
 
   private getGoogleMapsServerKey() {
     const apiKey = this.configService.get<string>('GOOGLE_MAPS_GEOCODING_API_KEY');
-    if (!apiKey) throw new ServiceUnavailableException('El servicio de ubicación no está configurado');
+    if (!apiKey) {
+      console.warn('[places] Google Maps server key is not configured');
+      throw new ServiceUnavailableException('El servicio de ubicación no está configurado');
+    }
     return apiKey;
   }
 
