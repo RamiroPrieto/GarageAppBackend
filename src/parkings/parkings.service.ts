@@ -191,6 +191,44 @@ export class ParkingsService {
     return { latitude, longitude, formattedAddress: payload.formattedAddress ?? placeId };
   }
 
+  async reverseGeocode(latitude: number, longitude: number): Promise<{ city: string; country: string }> {
+    const apiKey = this.getGoogleMapsServerKey();
+    const url = new URL('https://maps.googleapis.com/maps/api/geocode/json');
+    url.searchParams.set('latlng', `${latitude},${longitude}`);
+    url.searchParams.set('key', apiKey);
+
+    let response: Response;
+    try {
+      response = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+    } catch {
+      throw new ServiceUnavailableException('No pudimos obtener la ubicación del mapa');
+    }
+
+    const payload = await response.json().catch(() => null) as {
+      status?: string;
+      results?: Array<{
+        address_components?: Array<{ long_name?: string; types?: string[] }>;
+      }>;
+    } | null;
+
+    if (!response.ok || payload?.status !== 'OK') {
+      throw new ServiceUnavailableException('No pudimos obtener la ubicación del mapa');
+    }
+
+    const components = payload.results?.[0]?.address_components ?? [];
+    const findComponent = (...types: string[]) => components.find((component) =>
+      component.types?.some((type) => types.includes(type)),
+    )?.long_name;
+    const city = findComponent('locality', 'postal_town', 'administrative_area_level_2', 'administrative_area_level_1');
+    const country = findComponent('country');
+
+    if (!city || !country) {
+      throw new NotFoundException('No pudimos identificar la ciudad de esa ubicación');
+    }
+
+    return { city, country };
+  }
+
   private getGoogleMapsServerKey() {
     const apiKey = this.configService.get<string>('GOOGLE_MAPS_GEOCODING_API_KEY');
     if (!apiKey) {

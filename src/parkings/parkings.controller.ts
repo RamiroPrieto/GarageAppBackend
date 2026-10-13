@@ -23,6 +23,7 @@ import {
   import { GeocodeParkingAddressDto } from './dto/geocode-parking-address.dto';
   import { PlaceAutocompleteDto } from './dto/place-autocomplete.dto';
   import { PlaceDetailsDto } from './dto/place-details.dto';
+  import { ReverseGeocodeDto } from './dto/reverse-geocode.dto';
   
   @Controller('parkings')
   export class ParkingsController {
@@ -58,6 +59,12 @@ import {
     @Post('places/details')
     placeDetails(@Body() dto: PlaceDetailsDto) {
       return this.parkingsService.getPlaceDetails(dto.placeId);
+    }
+
+    @UseGuards(JwtAuthGuard)
+    @Post('reverse-geocode')
+    reverseGeocode(@Body() dto: ReverseGeocodeDto) {
+      return this.parkingsService.reverseGeocode(dto.latitude, dto.longitude);
     }
 
     @Get()
