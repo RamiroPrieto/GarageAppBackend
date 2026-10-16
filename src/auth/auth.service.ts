@@ -9,11 +9,16 @@ import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
 import { createHash, randomBytes } from 'crypto';
 import { OAuth2Client } from 'google-auth-library';
+import { createRemoteJWKSet, jwtVerify } from 'jose';
 
 import { PrismaService } from '../prisma/prisma.service';
 import { RegisterDto } from './dto/register.dto';
+import { AppleLoginDto } from './dto/apple-login.dto';
 import { LoginDto } from './dto/login.dto';
 import { EmailService } from '../email/email.service';
+
+const APPLE_ISSUER = 'https://appleid.apple.com';
+const APPLE_JWKS = createRemoteJWKSet(new URL('https://appleid.apple.com/auth/keys'));
 
 @Injectable()
 export class AuthService {
@@ -163,6 +168,59 @@ export class AuthService {
             password: null,
             googleId: payload.sub,
             profileImage: payload.picture,
+            emailVerified: true,
+          },
+        });
+      }
+    }
+
+    return this.createAccessToken(user.id, user.email);
+  }
+
+  async appleLogin({ idToken, firstName, lastName }: AppleLoginDto) {
+    const clientId = process.env.APPLE_CLIENT_ID;
+    if (!clientId) {
+      throw new ServiceUnavailableException('Apple Sign-In non è configurato');
+    }
+
+    let payload: { sub?: string; email?: string; email_verified?: boolean | string };
+    try {
+      const verified = await jwtVerify(idToken, APPLE_JWKS, {
+        issuer: APPLE_ISSUER,
+        audience: clientId,
+        algorithms: ['RS256'],
+      });
+      payload = verified.payload;
+    } catch {
+      throw new UnauthorizedException('Credenziale Apple non valida');
+    }
+
+    if (!payload.sub) {
+      throw new UnauthorizedException('Apple non ha restituito un identificatore utente valido');
+    }
+
+    let user = await this.prisma.user.findUnique({ where: { appleId: payload.sub } });
+
+    if (!user) {
+      const emailVerified = payload.email_verified === true || payload.email_verified === 'true';
+      if (!payload.email || !emailVerified) {
+        throw new UnauthorizedException('Apple non ha verificato questo indirizzo email');
+      }
+
+      user = await this.prisma.user.findUnique({ where: { email: payload.email } });
+      if (user) {
+        user = await this.prisma.user.update({
+          where: { id: user.id },
+          data: { appleId: payload.sub, emailVerified: true },
+        });
+      } else {
+        user = await this.prisma.user.create({
+          data: {
+            firstName: firstName?.trim() || 'Usuario',
+            lastName: lastName?.trim() || '',
+            email: payload.email,
+            password: null,
+            appleId: payload.sub,
             emailVerified: true,
           },
         });

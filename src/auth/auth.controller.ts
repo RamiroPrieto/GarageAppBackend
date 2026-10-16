@@ -3,6 +3,7 @@ import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 import { GoogleLoginDto } from './dto/google-login.dto';
+import { AppleLoginDto } from './dto/apple-login.dto';
 import { ResendVerificationDto } from './dto/resend-verification.dto';
 
 @Controller('auth')
@@ -31,5 +32,10 @@ export class AuthController {
   @Post('google')
   googleLogin(@Body() googleLoginDto: GoogleLoginDto) {
     return this.authService.googleLogin(googleLoginDto.idToken);
+  }
+
+  @Post('apple')
+  appleLogin(@Body() appleLoginDto: AppleLoginDto) {
+    return this.authService.appleLogin(appleLoginDto);
   }
 }
