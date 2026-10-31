@@ -4,6 +4,8 @@ import {
   BadRequestException,
   ServiceUnavailableException,
   UnauthorizedException,
+  HttpException,
+  HttpStatus,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
@@ -16,6 +18,7 @@ import { RegisterDto } from './dto/register.dto';
 import { AppleLoginDto } from './dto/apple-login.dto';
 import { LoginDto } from './dto/login.dto';
 import { EmailService } from '../email/email.service';
+import { SmsService } from '../sms/sms.service';
 
 const APPLE_ISSUER = 'https://appleid.apple.com';
 const APPLE_JWKS = createRemoteJWKSet(new URL('https://appleid.apple.com/auth/keys'));
@@ -26,6 +29,7 @@ export class AuthService {
     private readonly prisma: PrismaService,
     private readonly jwtService: JwtService,
     private readonly emailService: EmailService,
+    private readonly smsService: SmsService,
   ) {}
   async register(registerDto: RegisterDto) {
     const existingUser = await this.prisma.user.findUnique({
@@ -46,11 +50,15 @@ export class AuthService {
         lastName: registerDto.lastName,
         email: registerDto.email,
         password: hashedPassword,
-        phone: registerDto.phone,
+        phone: null,
+        pendingPhone: registerDto.phone,
       },
     });
 
     await this.sendVerificationEmail(user.id, user.firstName, user.email);
+    if (user.pendingPhone) {
+      await this.sendPhoneVerification(user.id, user.pendingPhone);
+    }
 
     return {
       id: user.id,
@@ -230,6 +238,26 @@ export class AuthService {
     return this.createAccessToken(user.id, user.email);
   }
 
+  async requestRegistrationPhoneVerification(email: string) {
+    const user = await this.prisma.user.findUnique({ where: { email } });
+    // Do not reveal whether an email has an account.
+    if (user?.pendingPhone) await this.sendPhoneVerification(user.id, user.pendingPhone);
+    return { sent: true };
+  }
+
+  async confirmRegistrationPhoneVerification(email: string, code: string) {
+    const user = await this.prisma.user.findUnique({ where: { email } });
+    if (!user?.pendingPhone) throw new BadRequestException('No hay un número pendiente de verificación');
+    const approved = await this.smsService.isVerificationApproved(user.pendingPhone, code);
+    if (!approved) throw new BadRequestException('El código SMS no es válido o venció');
+
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: { phone: user.pendingPhone, pendingPhone: null, phoneVerified: true, phoneVerificationSentAt: null },
+    });
+    return { verified: true };
+  }
+
   private async createAccessToken(userId: number, email: string) {
 
     const payload = {
@@ -256,6 +284,15 @@ export class AuthService {
       data: { userId, tokenHash: this.hashToken(token), expiresAt },
     });
     await this.emailService.sendVerificationEmail(firstName, email, token);
+  }
+
+  private async sendPhoneVerification(userId: number, phone: string) {
+    const user = await this.prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { phoneVerificationSentAt: true } });
+    if (user.phoneVerificationSentAt && Date.now() - user.phoneVerificationSentAt.getTime() < 60_000) {
+      throw new HttpException('Esperá un minuto antes de pedir otro código SMS', HttpStatus.TOO_MANY_REQUESTS);
+    }
+    await this.smsService.sendVerification(phone);
+    await this.prisma.user.update({ where: { id: userId }, data: { phoneVerificationSentAt: new Date() } });
   }
 
   private hashToken(token: string) {
