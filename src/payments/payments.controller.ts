@@ -16,6 +16,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PaymentsService } from './payments.service';
 import { CreateCreditPurchaseDto } from './dto/create-credit-purchase.dto';
 import { PayReservationWithCreditsDto } from './dto/pay-reservation-with-credits.dto';
+import { PaymentSheetClientLogDto } from './dto/payment-sheet-client-log.dto';
 
 @Controller('payments')
 export class PaymentsController {
@@ -83,6 +84,25 @@ export class PaymentsController {
       request.user!.userId,
       Number(reservationId),
     );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('payment-sheet-log')
+  logPaymentSheetClientEvent(
+    @Req() request: Request,
+    @Body() dto: PaymentSheetClientLogDto,
+  ) {
+    // Temporary diagnostic telemetry from the native Stripe SDK. The app only
+    // sends stage/result metadata; client secrets and card data are never sent.
+    console.log('[payments][client]', {
+      userId: request.user!.userId,
+      reservationId: dto.reservationId,
+      event: dto.event,
+      hasClientSecret: dto.hasClientSecret,
+      errorCode: dto.errorCode,
+      errorMessage: dto.errorMessage,
+    });
+    return { received: true };
   }
   @Post('webhook')
   handleWebhook(

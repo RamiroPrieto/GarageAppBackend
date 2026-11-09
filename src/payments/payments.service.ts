@@ -71,6 +71,11 @@ export class PaymentsService {
       },
     });
     console.log('[payments] PaymentIntent created', { paymentIntentId: paymentIntent.id, reservationId: reservation.id });
+    console.log('[payments] PaymentIntent response prepared', {
+      paymentIntentId: paymentIntent.id,
+      reservationId: reservation.id,
+      hasClientSecret: Boolean(paymentIntent.client_secret),
+    });
     return { clientSecret: paymentIntent.client_secret };
   }
 
