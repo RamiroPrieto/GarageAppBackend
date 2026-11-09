@@ -4,7 +4,6 @@ import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 import { GoogleLoginDto } from './dto/google-login.dto';
 import { AppleLoginDto } from './dto/apple-login.dto';
-import { ConfirmPhoneVerificationDto, RequestPhoneVerificationDto } from './dto/phone-verification.dto';
 import { ResendVerificationDto } from './dto/resend-verification.dto';
 
 @Controller('auth')
@@ -40,13 +39,4 @@ export class AuthController {
     return this.authService.appleLogin(appleLoginDto);
   }
 
-  @Post('phone-verification/request')
-  requestPhoneVerification(@Body() dto: RequestPhoneVerificationDto) {
-    return this.authService.requestRegistrationPhoneVerification(dto.email);
-  }
-
-  @Post('phone-verification/confirm')
-  confirmPhoneVerification(@Body() dto: ConfirmPhoneVerificationDto) {
-    return this.authService.confirmRegistrationPhoneVerification(dto.email, dto.code);
-  }
 }

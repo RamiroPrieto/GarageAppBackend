@@ -4,8 +4,6 @@ import {
   BadRequestException,
   ServiceUnavailableException,
   UnauthorizedException,
-  HttpException,
-  HttpStatus,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
@@ -18,7 +16,6 @@ import { RegisterDto } from './dto/register.dto';
 import { AppleLoginDto } from './dto/apple-login.dto';
 import { LoginDto } from './dto/login.dto';
 import { EmailService } from '../email/email.service';
-import { SmsService } from '../sms/sms.service';
 
 const APPLE_ISSUER = 'https://appleid.apple.com';
 const APPLE_JWKS = createRemoteJWKSet(new URL('https://appleid.apple.com/auth/keys'));
@@ -29,7 +26,6 @@ export class AuthService {
     private readonly prisma: PrismaService,
     private readonly jwtService: JwtService,
     private readonly emailService: EmailService,
-    private readonly smsService: SmsService,
   ) {}
   async register(registerDto: RegisterDto) {
     const existingUser = await this.prisma.user.findUnique({
@@ -44,28 +40,39 @@ export class AuthService {
 
     const hashedPassword = await bcrypt.hash(registerDto.password, 12);
 
-    const user = await this.prisma.user.create({
-      data: {
-        firstName: registerDto.firstName,
-        lastName: registerDto.lastName,
+    const token = randomBytes(32).toString('hex');
+    const pendingRegistration = await this.prisma.pendingRegistration.upsert({
+      where: { email: registerDto.email },
+      create: {
+        firstName: registerDto.firstName.trim(),
+        lastName: registerDto.lastName.trim(),
         email: registerDto.email,
         password: hashedPassword,
-        phone: null,
-        pendingPhone: registerDto.phone,
+        phone: registerDto.phone?.trim() || null,
+        tokenHash: this.hashToken(token),
+        expiresAt: this.verificationExpiry(),
+      },
+      update: {
+        firstName: registerDto.firstName.trim(),
+        lastName: registerDto.lastName.trim(),
+        password: hashedPassword,
+        phone: registerDto.phone?.trim() || null,
+        tokenHash: this.hashToken(token),
+        expiresAt: this.verificationExpiry(),
       },
     });
 
-    await this.sendVerificationEmail(user.id, user.firstName, user.email);
-    if (user.pendingPhone) {
-      await this.sendPhoneVerification(user.id, user.pendingPhone);
-    }
+    // SMS is intentionally not used for registration. A User is only created
+    // after the recipient opens the email confirmation link.
+    await this.emailService.sendVerificationEmail(
+      pendingRegistration.firstName,
+      pendingRegistration.email,
+      token,
+    );
 
     return {
-      id: user.id,
-      firstName: user.firstName,
-      lastName: user.lastName,
-      email: user.email,
-      phone: user.phone,
+      email: pendingRegistration.email,
+      pendingEmailVerification: true,
     };
   }
   async login(loginDto: LoginDto) {
@@ -105,6 +112,45 @@ export class AuthService {
     }
 
     const tokenHash = this.hashToken(token);
+    const pendingRegistration = await this.prisma.pendingRegistration.findUnique({
+      where: { tokenHash },
+    });
+
+    if (pendingRegistration) {
+      if (pendingRegistration.expiresAt < new Date()) {
+        throw new BadRequestException('Confirmation link is invalid or expired');
+      }
+
+      await this.prisma.$transaction(async (tx) => {
+        const claimed = await tx.pendingRegistration.deleteMany({
+          where: { id: pendingRegistration.id, tokenHash },
+        });
+        if (claimed.count !== 1) {
+          throw new BadRequestException('Confirmation link is invalid or expired');
+        }
+
+        const existingUser = await tx.user.findUnique({
+          where: { email: pendingRegistration.email },
+        });
+        if (existingUser) {
+          throw new ConflictException('Email is already registered');
+        }
+
+        await tx.user.create({
+          data: {
+            firstName: pendingRegistration.firstName,
+            lastName: pendingRegistration.lastName,
+            email: pendingRegistration.email,
+            password: pendingRegistration.password,
+            phone: pendingRegistration.phone,
+            emailVerified: true,
+          },
+        });
+      }, { isolationLevel: 'Serializable' });
+
+      return { message: 'Email confirmed. You can now sign in to GarageApp.' };
+    }
+
     const verification = await this.prisma.emailVerificationToken.findUnique({
       where: { tokenHash },
       include: { user: true },
@@ -129,6 +175,24 @@ export class AuthService {
   }
 
   async resendVerification(email: string) {
+    const pendingRegistration = await this.prisma.pendingRegistration.findUnique({ where: { email } });
+    if (pendingRegistration) {
+      const token = randomBytes(32).toString('hex');
+      await this.prisma.pendingRegistration.update({
+        where: { id: pendingRegistration.id },
+        data: {
+          tokenHash: this.hashToken(token),
+          expiresAt: this.verificationExpiry(),
+        },
+      });
+      await this.emailService.sendVerificationEmail(
+        pendingRegistration.firstName,
+        pendingRegistration.email,
+        token,
+      );
+      return { message: 'If the account exists, a new confirmation link was sent.' };
+    }
+
     const user = await this.prisma.user.findUnique({ where: { email } });
 
     if (user && !user.emailVerified && user.password) {
@@ -238,6 +302,7 @@ export class AuthService {
     return this.createAccessToken(user.id, user.email);
   }
 
+  /*
   async requestRegistrationPhoneVerification(email: string) {
     const user = await this.prisma.user.findUnique({ where: { email } });
     // Do not reveal whether an email has an account.
@@ -258,6 +323,8 @@ export class AuthService {
     return { verified: true };
   }
 
+  */
+
   private async createAccessToken(userId: number, email: string) {
 
     const payload = {
@@ -274,7 +341,7 @@ export class AuthService {
 
   private async sendVerificationEmail(userId: number, firstName: string, email: string) {
     const token = randomBytes(32).toString('hex');
-    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    const expiresAt = this.verificationExpiry();
 
     await this.prisma.emailVerificationToken.updateMany({
       where: { userId, usedAt: null },
@@ -286,6 +353,7 @@ export class AuthService {
     await this.emailService.sendVerificationEmail(firstName, email, token);
   }
 
+  /*
   private async sendPhoneVerification(userId: number, phone: string) {
     const user = await this.prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { phoneVerificationSentAt: true } });
     if (user.phoneVerificationSentAt && Date.now() - user.phoneVerificationSentAt.getTime() < 60_000) {
@@ -293,6 +361,11 @@ export class AuthService {
     }
     await this.smsService.sendVerification(phone);
     await this.prisma.user.update({ where: { id: userId }, data: { phoneVerificationSentAt: new Date() } });
+  }
+  */
+
+  private verificationExpiry() {
+    return new Date(Date.now() + 24 * 60 * 60 * 1000);
   }
 
   private hashToken(token: string) {

@@ -6,13 +6,11 @@ import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { EmailModule } from '../email/email.module';
-import { SmsModule } from '../sms/sms.module';
 
 @Module({
   imports: [
     PassportModule,
     EmailModule,
-    SmsModule,
     JwtModule.register({
       secret: process.env.JWT_SECRET,
       signOptions: {
