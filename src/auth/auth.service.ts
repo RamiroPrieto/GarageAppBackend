@@ -83,6 +83,16 @@ export class AuthService {
     });
 
     if (!user) {
+      const pendingRegistration = await this.prisma.pendingRegistration.findUnique({
+        where: { email: loginDto.email },
+      });
+      if (
+        pendingRegistration
+        && await bcrypt.compare(loginDto.password, pendingRegistration.password)
+      ) {
+        await this.resendPendingRegistrationVerification(pendingRegistration);
+        throw new UnauthorizedException('Revisá tu email: te enviamos un nuevo enlace de confirmación');
+      }
       throw new UnauthorizedException('Credenciales incorrectas');
     }
 
@@ -100,6 +110,7 @@ export class AuthService {
     }
 
     if (!user.emailVerified) {
+      await this.sendVerificationEmail(user.id, user.firstName, user.email);
       throw new UnauthorizedException('Devi confermare il tuo indirizzo email prima di accedere');
     }
 
@@ -177,19 +188,7 @@ export class AuthService {
   async resendVerification(email: string) {
     const pendingRegistration = await this.prisma.pendingRegistration.findUnique({ where: { email } });
     if (pendingRegistration) {
-      const token = randomBytes(32).toString('hex');
-      await this.prisma.pendingRegistration.update({
-        where: { id: pendingRegistration.id },
-        data: {
-          tokenHash: this.hashToken(token),
-          expiresAt: this.verificationExpiry(),
-        },
-      });
-      await this.emailService.sendVerificationEmail(
-        pendingRegistration.firstName,
-        pendingRegistration.email,
-        token,
-      );
+      await this.resendPendingRegistrationVerification(pendingRegistration);
       return { message: 'If the account exists, a new confirmation link was sent.' };
     }
 
@@ -351,6 +350,24 @@ export class AuthService {
       data: { userId, tokenHash: this.hashToken(token), expiresAt },
     });
     await this.emailService.sendVerificationEmail(firstName, email, token);
+  }
+
+  private async resendPendingRegistrationVerification(
+    pendingRegistration: { id: number; firstName: string; email: string },
+  ) {
+    const token = randomBytes(32).toString('hex');
+    await this.prisma.pendingRegistration.update({
+      where: { id: pendingRegistration.id },
+      data: {
+        tokenHash: this.hashToken(token),
+        expiresAt: this.verificationExpiry(),
+      },
+    });
+    await this.emailService.sendVerificationEmail(
+      pendingRegistration.firstName,
+      pendingRegistration.email,
+      token,
+    );
   }
 
   /*
