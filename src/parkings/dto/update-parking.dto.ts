@@ -5,6 +5,7 @@ import {
     IsNumber,
     IsOptional,
     IsString,
+    MaxLength,
   } from 'class-validator';
   
   import { Currency, ParkingType } from '@prisma/client';
@@ -69,4 +70,9 @@ import {
     @IsOptional()
     @IsEnum(ParkingType)
     parkingType?: ParkingType;
+
+    @IsOptional()
+    @IsString()
+    @MaxLength(2_800_000)
+    coverPhoto?: string;
   }

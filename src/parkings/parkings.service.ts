@@ -242,35 +242,49 @@ export class ParkingsService {
     ownerId: number,
     createParkingDto: CreateParkingDto,
   ) {
+    const { coverPhoto, ...parkingData } = createParkingDto;
+
     return this.prisma.parking.create({
       data: {
         ownerId,
 
-        title: createParkingDto.title,
-        description: createParkingDto.description,
+        title: parkingData.title,
+        description: parkingData.description,
 
-        address: createParkingDto.address,
-        city: createParkingDto.city,
-        country: createParkingDto.country,
+        address: parkingData.address,
+        city: parkingData.city,
+        country: parkingData.country,
 
-        latitude: createParkingDto.latitude,
-        longitude: createParkingDto.longitude,
+        latitude: parkingData.latitude,
+        longitude: parkingData.longitude,
 
-        pricePerHour: createParkingDto.pricePerHour,
-        pricePerDay: createParkingDto.pricePerDay,
-        currency: createParkingDto.currency ?? 'EUR',
+        pricePerHour: parkingData.pricePerHour,
+        pricePerDay: parkingData.pricePerDay,
+        currency: parkingData.currency ?? 'EUR',
 
-        maxHeight: createParkingDto.maxHeight,
-        maxWidth: createParkingDto.maxWidth,
+        maxHeight: parkingData.maxHeight,
+        maxWidth: parkingData.maxWidth,
 
-        covered: createParkingDto.covered,
+        covered: parkingData.covered,
 
-        parkingType: createParkingDto.parkingType,
+        parkingType: parkingData.parkingType,
 
         // Los dejamos controlados por backend
         parkingStatus: 'AVAILABLE',
         active: true,
+        ...(coverPhoto
+          ? {
+              photos: {
+                create: {
+                  imageUrl: coverPhoto,
+                  displayOrder: 0,
+                  isCover: true,
+                },
+              },
+            }
+          : {}),
       },
+      include: { photos: { orderBy: { displayOrder: 'asc' } } },
     });
   }
   async findAll() {
@@ -281,12 +295,14 @@ export class ParkingsService {
       orderBy: {
         createdAt: 'desc',
       },
+      include: { photos: { orderBy: { displayOrder: 'asc' } } },
     });
   }
   async findMine(ownerId: number) {
     return this.prisma.parking.findMany({
       where: { ownerId },
       orderBy: { createdAt: 'desc' },
+      include: { photos: { orderBy: { displayOrder: 'asc' } } },
     });
   }
   async findReservations(ownerId: number, parkingId: number) {
@@ -328,11 +344,28 @@ export class ParkingsService {
       throw new NotFoundException('Parking no encontrado');
     }
   
+    const { coverPhoto, ...parkingData } = updateParkingDto;
+
     return this.prisma.parking.update({
       where: {
         id: parkingId,
       },
-      data: updateParkingDto,
+      data: {
+        ...parkingData,
+        ...(coverPhoto
+          ? {
+              photos: {
+                deleteMany: { isCover: true },
+                create: {
+                  imageUrl: coverPhoto,
+                  displayOrder: 0,
+                  isCover: true,
+                },
+              },
+            }
+          : {}),
+      },
+      include: { photos: { orderBy: { displayOrder: 'asc' } } },
     });
   }
   async remove(ownerId: number, parkingId: number) {
@@ -362,7 +395,7 @@ export class ParkingsService {
     longitude: number,
     radius: number,
   ) {
-    return this.prisma.$queryRaw<
+    const parkings = await this.prisma.$queryRaw<
       Array<{
         id: number;
         ownerId: number;
@@ -416,6 +449,23 @@ export class ParkingsService {
       WHERE nearby.distance <= ${radius}
       ORDER BY nearby.distance ASC;
     `);
+
+    const photos = await this.prisma.parkingPhoto.findMany({
+      where: { parkingId: { in: parkings.map((parking) => parking.id) } },
+      orderBy: [{ isCover: 'desc' }, { displayOrder: 'asc' }],
+    });
+    const photosByParking = new Map<number, typeof photos>();
+    for (const photo of photos) {
+      photosByParking.set(photo.parkingId, [
+        ...(photosByParking.get(photo.parkingId) ?? []),
+        photo,
+      ]);
+    }
+
+    return parkings.map((parking) => ({
+      ...parking,
+      photos: photosByParking.get(parking.id) ?? [],
+    }));
   }
   async updateActive(
     ownerId: number,
@@ -478,6 +528,7 @@ export class ParkingsService {
           },
         },
       },
+      include: { photos: { orderBy: { displayOrder: 'asc' } } },
     });
 
     if (
