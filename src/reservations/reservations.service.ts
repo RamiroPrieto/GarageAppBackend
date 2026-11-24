@@ -336,21 +336,55 @@ import { NotificationsService } from '../notifications/notifications.service';
         }
 
         const now = new Date();
-        const startedReservation = await this.prisma.reservation.update({
-          where: { id: reservation.id },
-          data: {
-            ...(role === 'customer' ? { customerStartedAt: reservation.customerStartedAt ?? now } : { ownerStartedAt: reservation.ownerStartedAt ?? now }),
-          },
-          include: { parking: true, vehicle: true, user: { select: { id: true, firstName: true, lastName: true, email: true } }, payment: true },
-        });
-        if (startedReservation.customerStartedAt && startedReservation.ownerStartedAt) {
-          return this.prisma.reservation.update({
-            where: { id: reservation.id },
-            data: { status: 'ACTIVE', startedAt: startedReservation.startedAt ?? now },
-            include: { parking: true, vehicle: true, user: { select: { id: true, firstName: true, lastName: true, email: true } }, payment: true },
+        await this.prisma.$transaction(async (tx) => {
+          // updateMany only writes the acknowledgement once. Reading after that
+          // write prevents two nearly simultaneous confirmations from leaving a
+          // reservation confirmed even though both parties accepted it.
+          await tx.reservation.updateMany({
+            where: {
+              id: reservation.id,
+              status: 'CONFIRMED',
+              ...(role === 'customer'
+                ? { customerStartedAt: null }
+                : { ownerStartedAt: null }),
+            },
+            data: role === 'customer'
+              ? { customerStartedAt: now }
+              : { ownerStartedAt: now },
           });
-        }
-        return startedReservation;
+
+          const current = await tx.reservation.findUnique({
+            where: { id: reservation.id },
+            select: {
+              status: true,
+              customerStartedAt: true,
+              ownerStartedAt: true,
+              startedAt: true,
+            },
+          });
+          if (!current) throw new NotFoundException('Reserva no encontrada');
+
+          if (
+            current.status === 'CONFIRMED' &&
+            current.customerStartedAt &&
+            current.ownerStartedAt
+          ) {
+            await tx.reservation.update({
+              where: { id: reservation.id },
+              data: { status: 'ACTIVE', startedAt: current.startedAt ?? now },
+            });
+          }
+        });
+
+        return this.prisma.reservation.findUniqueOrThrow({
+          where: { id: reservation.id },
+          include: {
+            parking: true,
+            vehicle: true,
+            user: { select: { id: true, firstName: true, lastName: true, email: true } },
+            payment: true,
+          },
+        });
       }
 
       @Cron('0 * * * * *')
