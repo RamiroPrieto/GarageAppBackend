@@ -6,7 +6,7 @@ import { NotificationsService } from './notifications.service';
 
 class RegisterPushTokenDto {
   @IsString()
-  @Matches(/^ExponentPushToken\[.+\]$/)
+  @Matches(/^(Exponent|Expo)PushToken\[.+\]$/)
   token: string;
 }
 
