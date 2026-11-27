@@ -56,9 +56,14 @@ describe('LegalController', () => {
     expect(none.text).toContain('<html lang="en">');
   });
 
-  it('highlights missing details and escapes the configured ones', async () => {
-    expect((await get('/privacy?lang=en')).text).toContain('<mark>');
+  it('shows the operator details', async () => {
+    const { text } = await get('/privacy?lang=es');
+    expect(text).toContain('Franco Armanasco');
+    expect(text).toContain('Via Giacinto Collegno 20, 10143 Torino, Italia');
+    expect(text).not.toContain('<mark>');
+  });
 
+  it('lets the environment override the details, escaped', async () => {
     process.env.LEGAL_NAME = 'A <b>& C$&';
     process.env.LEGAL_ADDRESS = 'Via Roma 1, Torino';
     const { text } = await get('/privacy?lang=en');

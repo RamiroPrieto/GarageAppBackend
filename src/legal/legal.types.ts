@@ -9,7 +9,7 @@ export const LEGAL_PAGES = [
 ] as const;
 export type LegalPage = (typeof LEGAL_PAGES)[number];
 
-// Who runs the service. Comes from the environment, see legal.identity.ts.
+// Who runs the service. Defaults in legal.identity.ts, overridable by environment.
 export interface LegalIdentity {
   name?: string;
   address?: string;
