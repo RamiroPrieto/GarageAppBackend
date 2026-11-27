@@ -8,12 +8,18 @@ import {
 import { CreateReservationDto } from './dto/create-reservation.dto';
 import { Cron } from '@nestjs/schedule';
 import { NotificationsService } from '../notifications/notifications.service';
+import { PaymentsService } from '../payments/payments.service';
+import { calculateReservationPrice } from '../common/pricing';
+
+// Parkings have no time zone of their own yet, so reminders use one for all.
+const DEFAULT_TIME_ZONE = 'Europe/Rome';
   
   @Injectable()
   export class ReservationsService {
     constructor(
       private readonly prisma: PrismaService,
       private readonly notifications: NotificationsService,
+      private readonly payments: PaymentsService,
     ) {}
   
     async create(
@@ -48,132 +54,62 @@ import { NotificationsService } from '../notifications/notifications.service';
           );
         }
 
-        // 2. Buscar parking
-      
-        const parking = await this.prisma.parking.findUnique({
-          where: {
-            id: parkingId,
-          },
-        });
-      
-        if (!parking) {
-          throw new NotFoundException(
-            'Parking no encontrado',
-          );
-        }
-      
-        // 3. Verificar que esté activo
-      
-        if (!parking.active) {
-          throw new BadRequestException(
-            'El parking no está activo',
-          );
-        }
-      
-        // 4. Verificar estado del parking
-      
-        if (parking.parkingStatus !== 'AVAILABLE') {
-          throw new BadRequestException(
-            'El parking no está disponible',
-          );
-        }
-      
-        // 5. Verificar vehículo
-      
-        if (vehicleId) {
-          const vehicle = await this.prisma.vehicle.findFirst({
-            where: {
-              id: vehicleId,
-              userId,
-            },
-          });
-      
-          if (!vehicle) {
-            throw new NotFoundException(
-              'Vehículo no encontrado',
-            );
+        const reservation = await this.prisma.$transaction(async (tx) => {
+          // Lock the parking row so concurrent requests for the same parking
+          // run one after another; otherwise two of them could both pass the
+          // overlap check below and double-book the slot.
+          await tx.$queryRaw`SELECT id FROM "Parking" WHERE id = ${parkingId} FOR UPDATE`;
+
+          const parking = await tx.parking.findUnique({ where: { id: parkingId } });
+          if (!parking) {
+            throw new NotFoundException('Parking no encontrado');
           }
-        }
-      
-        // 6. Eliminar conceptualmente reservas PENDING expiradas
-        //
-        // No necesitamos borrarlas.
-        // Las marcamos como EXPIRED.
-      
-        const now = new Date();
-      
-        await this.prisma.reservation.updateMany({
-          where: {
-            parkingId,
-            status: 'PENDING',
-            expiresAt: {
-              lt: now,
-            },
-          },
-          data: {
-            status: 'EXPIRED',
-          },
-        });
-      
-        // 7. Buscar reservas que se superpongan
-      
-        const overlappingReservation =
-          await this.prisma.reservation.findFirst({
+          if (!parking.active) {
+            throw new BadRequestException('El parking no está activo');
+          }
+          if (parking.parkingStatus !== 'AVAILABLE') {
+            throw new BadRequestException('El parking no está disponible');
+          }
+
+          if (vehicleId) {
+            const vehicle = await tx.vehicle.findFirst({ where: { id: vehicleId, userId } });
+            if (!vehicle) {
+              throw new NotFoundException('Vehículo no encontrado');
+            }
+          }
+
+          // Unpaid holds that ran out no longer block the slot.
+          const now = new Date();
+          await tx.reservation.updateMany({
+            where: { parkingId, status: 'PENDING', expiresAt: { lt: now } },
+            data: { status: 'EXPIRED' },
+          });
+
+          const overlappingReservation = await tx.reservation.findFirst({
             where: {
               parkingId,
-      
-              status: {
-                    in: ['PENDING', 'CONFIRMED', 'ACTIVE'],
-              },
-      
-              startDatetime: {
-                lt: end,
-              },
-      
-              endDatetime: {
-                gt: start,
-              },
+              status: { in: ['PENDING', 'CONFIRMED', 'ACTIVE'] },
+              startDatetime: { lt: end },
+              endDatetime: { gt: start },
             },
           });
-      
-        if (overlappingReservation) {
-          throw new BadRequestException(
-            'El parking ya está reservado en ese horario',
-          );
-        }
-      
-        // 8. Calcular precio
-      
-        const durationInHours =
-          (end.getTime() - start.getTime()) /
-          (1000 * 60 * 60);
-      
-        const totalPrice =
-          durationInHours *
-          Number(parking.pricePerHour);
-      
-        // 9. Crear reserva PENDING
-      
-        const expiresAt = new Date(
-          now.getTime() + 10 * 60 * 1000,
-        );
-      
-        const reservation = await this.prisma.reservation.create({
-          data: {
-            parkingId,
-            userId,
-            vehicleId,
-      
-            startDatetime: start,
-            endDatetime: end,
-      
-            totalPrice,
-            currency: parking.currency,
-      
-            status: 'PENDING',
-      
-            expiresAt,
-          },
+          if (overlappingReservation) {
+            throw new BadRequestException('El parking ya está reservado en ese horario');
+          }
+
+          return tx.reservation.create({
+            data: {
+              parkingId,
+              userId,
+              vehicleId,
+              startDatetime: start,
+              endDatetime: end,
+              totalPrice: calculateReservationPrice(start, end, parking.pricePerHour),
+              currency: parking.currency,
+              status: 'PENDING',
+              expiresAt: new Date(now.getTime() + 10 * 60 * 1000),
+            },
+          });
         });
         console.log('[reservations] Reservation created', { reservationId: reservation.id, userId, parkingId });
         return reservation;
@@ -183,15 +119,7 @@ import { NotificationsService } from '../notifications/notifications.service';
         return this.prisma.reservation.findMany({
           where: { OR: [{ userId }, { parking: { ownerId: userId } }] },
           include: {
-            parking: {
-              include: {
-                photos: {
-                  orderBy: {
-                    displayOrder: 'asc',
-                  },
-                },
-              },
-            },
+            parking: true,
             vehicle: true,
             payment: true,
             user: { select: { id: true, firstName: true, lastName: true, email: true } },
@@ -209,15 +137,7 @@ import { NotificationsService } from '../notifications/notifications.service';
             OR: [{ userId }, { parking: { ownerId: userId } }],
           },
           include: {
-            parking: {
-              include: {
-                photos: {
-                  orderBy: {
-                    displayOrder: 'asc',
-                  },
-                },
-              },
-            },
+            parking: true,
             vehicle: true,
             payment: true,
             user: { select: { id: true, firstName: true, lastName: true, email: true } },
@@ -247,23 +167,21 @@ import { NotificationsService } from '../notifications/notifications.service';
           );
         }
       
-        if (
-          reservation.status !== 'PENDING' &&
-          reservation.status !== 'CONFIRMED'
-        ) {
+        // Only unpaid reservations can be cancelled: there is no refund flow yet,
+        // so cancelling a CONFIRMED one would keep the customer's money. The
+        // status is part of the write so a payment landing meanwhile wins.
+        const cancelled = await this.prisma.reservation.updateMany({
+          where: { id: reservationId, userId, status: 'PENDING' },
+          data: { status: 'CANCELLED' },
+        });
+        if (cancelled.count !== 1) {
           throw new BadRequestException(
             'La reserva no puede ser cancelada',
           );
         }
-      
-        return this.prisma.reservation.update({
-          where: {
-            id: reservationId,
-          },
-          data: {
-            status: 'CANCELLED',
-          },
-        });
+
+        await this.payments.cancelPendingPaymentIntent(reservationId);
+        return this.prisma.reservation.findUniqueOrThrow({ where: { id: reservationId } });
       }
 
       async findForParking(ownerId: number, parkingId: number) {
@@ -276,7 +194,7 @@ import { NotificationsService } from '../notifications/notifications.service';
           include: {
             user: { select: { id: true, firstName: true, lastName: true, email: true } },
             vehicle: true,
-            parking: { include: { photos: { orderBy: { displayOrder: 'asc' } } } },
+            parking: true,
           },
           orderBy: { startDatetime: 'desc' },
         });
@@ -293,7 +211,7 @@ import { NotificationsService } from '../notifications/notifications.service';
             OR: [{ userId }, { parking: { ownerId: userId } }],
           },
           include: {
-            parking: { include: { photos: { orderBy: { displayOrder: 'asc' } } } },
+            parking: true,
             vehicle: true,
             user: { select: { id: true, firstName: true, lastName: true } },
           },
@@ -401,11 +319,11 @@ import { NotificationsService } from '../notifications/notifications.service';
         for (const minutes of [30, 10]) {
           const target = new Date(now.getTime() + minutes * 60 * 1000);
           const reservations = await this.prisma.reservation.findMany({
-            where: { status: 'CONFIRMED', startDatetime: { gte: new Date(target.getTime() - 30_000), lte: new Date(target.getTime() + 30_000) } },
+            where: { status: 'CONFIRMED', startDatetime: { gte: new Date(target.getTime() - 30_000), lt: new Date(target.getTime() + 30_000) } },
             include: { parking: true, vehicle: true },
           });
           await Promise.all(reservations.flatMap((reservation) => {
-            const schedule = reservation.startDatetime.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' });
+            const schedule = reservation.startDatetime.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit', timeZone: process.env.APP_TIME_ZONE || DEFAULT_TIME_ZONE });
             const vehicle = reservation.vehicle ? ` · ${reservation.vehicle.licensePlate}` : '';
             const body = `${reservation.parking.title} · ${schedule}${vehicle}`;
             return [

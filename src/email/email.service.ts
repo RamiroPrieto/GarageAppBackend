@@ -1,11 +1,23 @@
 import { Injectable, ServiceUnavailableException } from '@nestjs/common';
 import { Resend } from 'resend';
 
+// Names are typed by users and end up inside HTML.
+function escapeHtml(value: string) {
+  return value.replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`);
+}
+
 // TEMPORAL: actualmente usamos Resend.
 // En el futuro podemos volver a SMTP/Nodemailer.
 @Injectable()
 export class EmailService {
-  private readonly resend = new Resend(process.env.RESEND_API_KEY);
+  // Created on first use: Resend throws without a key, which would stop the
+  // whole API from starting wherever email is not configured.
+  private client?: Resend;
+
+  private get resend() {
+    this.client ??= new Resend(process.env.RESEND_API_KEY);
+    return this.client;
+  }
 
   async sendVerificationEmail(
     name: string,
@@ -34,7 +46,7 @@ export class EmailService {
       subject: 'Conferma il tuo indirizzo email - GarageApp',
       text: `Ciao ${name}, conferma il tuo indirizzo email: ${url.toString()}. Il link scade tra 24 ore.`,
       html: `
-        <p>Ciao ${name},</p>
+        <p>Ciao ${escapeHtml(name)},</p>
 
         <p>
           Hai creato un account GarageApp.
@@ -108,6 +120,24 @@ export class EmailService {
       `,
     });
     */
+  }
+
+  async sendPasswordResetEmail(name: string, email: string, code: string) {
+    const from = process.env.EMAIL_FROM;
+    if (!process.env.RESEND_API_KEY || !from) throw new ServiceUnavailableException('El servicio de email no está configurado');
+    const { error } = await this.resend.emails.send({
+      from,
+      to: email,
+      subject: 'Reimposta la tua password - GarageApp',
+      text: `Ciao ${name}, il tuo codice per reimpostare la password è ${code}. Scade tra 15 minuti. Se non l'hai richiesto, ignora questa email.`,
+      html: `
+        <p>Ciao ${escapeHtml(name)},</p>
+        <p>Il tuo codice per reimpostare la password è:</p>
+        <p style="font-size:28px;letter-spacing:6px"><strong>${code}</strong></p>
+        <p>Scade tra 15 minuti. Se non l'hai richiesto, ignora questa email.</p>
+      `,
+    });
+    if (error) throw new ServiceUnavailableException(`No se pudo enviar el email: ${error.message}`);
   }
 
   async sendSupportEmail(user: { firstName: string; lastName: string; email: string }, subject: string, message: string) {

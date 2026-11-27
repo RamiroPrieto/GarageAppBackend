@@ -1,5 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { CreditPurchaseStatus } from '@prisma/client';
 import Stripe from 'stripe';
+import { calculateReservationPrice, roundMoney } from '../common/pricing';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreatePaymentDto } from './dto/create-payment.dto';
 import { CreateCreditPurchaseDto } from './dto/create-credit-purchase.dto';
@@ -29,6 +31,15 @@ export class PaymentsService {
     return { user, customerId: customer.id };
   }
 
+  // Best effort: the account is already erased on our side.
+  async deleteCustomer(userId: number, customerId: string) {
+    try {
+      await this.stripe.customers.del(customerId);
+    } catch {
+      console.error('[payments] Stripe customer could not be deleted', { userId, customerId });
+    }
+  }
+
   async createSetupIntent(userId: number) {
     const { customerId } = await this.getStripeCustomer(userId);
     const setupIntent = await this.stripe.setupIntents.create({
@@ -42,19 +53,21 @@ export class PaymentsService {
       where: { id: dto.reservationId, userId }, include: { payment: true, parking: true },
     });
     if (!reservation) throw new NotFoundException('Reserva no encontrada');
-    if (reservation.expiresAt && reservation.expiresAt < new Date()) {
-      await this.prisma.reservation.update({ where: { id: reservation.id }, data: { status: 'EXPIRED' } });
+    // expiresAt survives confirmation, so only a reservation that is still
+    // PENDING may be moved to EXPIRED.
+    if (reservation.status === 'PENDING' && reservation.expiresAt && reservation.expiresAt < new Date()) {
+      await this.prisma.reservation.updateMany({ where: { id: reservation.id, status: 'PENDING' }, data: { status: 'EXPIRED' } });
       throw new BadRequestException('La reserva ha expirado');
     }
     this.assertPendingReservation(reservation);
     if (reservation.payment) throw new BadRequestException('La reserva ya tiene un pago asociado');
 
-    // Recalculate server-side immediately before charging; client input is never used.
-    const totalPrice = this.calculateReservationPrice(reservation);
-    await this.prisma.reservation.update({ where: { id: reservation.id }, data: { totalPrice } });
+    // Charge the price the server fixed when the reservation was created, so an
+    // owner editing the parking meanwhile cannot change what the customer pays.
+    const totalPrice = roundMoney(Number(reservation.totalPrice));
     const { customerId } = await this.getStripeCustomer(userId);
     const amountInCents = Math.round(totalPrice * 100);
-    const commission = totalPrice * 0.1;
+    const commission = roundMoney(totalPrice * 0.1);
     const paymentIntent = await this.stripe.paymentIntents.create({
       amount: amountInCents,
       currency: reservation.currency.toLowerCase() as 'eur' | 'usd',
@@ -66,7 +79,7 @@ export class PaymentsService {
     await this.prisma.payment.create({
       data: {
         reservationId: reservation.id, payerUserId: userId, amount: totalPrice,
-        currency: reservation.currency, commission, ownerAmount: totalPrice - commission,
+        currency: reservation.currency, commission, ownerAmount: roundMoney(totalPrice - commission),
         paymentMethod: 'STRIPE', stripePaymentIntentId: paymentIntent.id, status: 'PENDING',
       },
     });
@@ -126,7 +139,10 @@ export class PaymentsService {
       select: { status: true, credits: true, stripePaymentIntentId: true, user: { select: { creditBalance: true } } },
     });
     if (!purchase) throw new NotFoundException('Compra de créditos no encontrada');
-    if (purchase.status === 'PENDING') {
+    let status: CreditPurchaseStatus = purchase.status;
+    // FAILED only records a declined attempt. The same PaymentIntent can still
+    // succeed when the customer retries in the PaymentSheet, so ask Stripe too.
+    if (purchase.status !== 'SUCCEEDED') {
       const intent = await this.stripe.paymentIntents.retrieve(paymentIntentId);
       if (intent.status === 'succeeded') {
         if (intent.livemode !== (this.stripeMode() === 'live')) {
@@ -143,12 +159,15 @@ export class PaymentsService {
           where: { stripePaymentIntentId: paymentIntentId, userId },
           select: { status: true, credits: true, stripePaymentIntentId: true, user: { select: { creditBalance: true } } },
         });
+        status = purchase.status;
+      } else if (intent.status === 'processing') {
+        status = 'PENDING';
       }
     }
 
     return {
       paymentIntentId: purchase.stripePaymentIntentId,
-      status: purchase.status,
+      status,
       credits: purchase.credits,
       creditBalance: purchase.user.creditBalance,
     };
@@ -165,7 +184,7 @@ export class PaymentsService {
       select: { pricePerHour: true, currency: true },
     });
     if (!parking) throw new NotFoundException('Parking no encontrado');
-    const totalPrice = (end.getTime() - start.getTime()) / 3_600_000 * Number(parking.pricePerHour);
+    const totalPrice = calculateReservationPrice(start, end, parking.pricePerHour);
     return { credits: this.calculateCreditsForReservation(totalPrice, parking.currency) };
   }
 
@@ -184,7 +203,7 @@ export class PaymentsService {
         this.assertPendingReservation(reservation);
         if (reservation.payment) throw new BadRequestException('La reserva ya tiene un pago asociado');
 
-        const totalPrice = this.calculateReservationPrice(reservation);
+        const totalPrice = roundMoney(Number(reservation.totalPrice));
         const credits = this.calculateCreditsForReservation(totalPrice, reservation.currency);
         const debit = await tx.user.updateMany({
           where: { id: userId, creditBalance: { gte: credits } },
@@ -200,7 +219,7 @@ export class PaymentsService {
           data: { userId, type: 'RESERVATION_DEBIT', amount: -credits, balanceAfter: user.creditBalance, reservationId },
         });
         return tx.reservation.update({
-          where: { id: reservationId }, data: { totalPrice, status: 'CONFIRMED' },
+          where: { id: reservationId }, data: { status: 'CONFIRMED' },
           include: { payment: true, parking: true, creditTransaction: true },
         });
       }, { isolationLevel: 'Serializable' });
@@ -288,7 +307,7 @@ export class PaymentsService {
     await this.prisma.$transaction(async (tx) => {
       // The conditional state change is the webhook idempotency gate.
       const claimed = await tx.creditPurchase.updateMany({
-        where: { stripePaymentIntentId: paymentIntentId, status: 'PENDING' }, data: { status: 'SUCCEEDED' },
+        where: { stripePaymentIntentId: paymentIntentId, status: { in: ['PENDING', 'FAILED'] } }, data: { status: 'SUCCEEDED' },
       });
       if (claimed.count !== 1) {
         console.log('[credits] Webhook ignorado: compra ya procesada', { paymentIntentId });
@@ -318,11 +337,59 @@ export class PaymentsService {
 
   private async markPaymentSucceeded(paymentId: number) {
     const payment = await this.prisma.payment.findUniqueOrThrow({ where: { id: paymentId } });
-    await this.prisma.$transaction([
-      this.prisma.payment.update({ where: { id: payment.id }, data: { status: 'SUCCEEDED' } }),
-      this.prisma.reservation.updateMany({ where: { id: payment.reservationId, status: 'PENDING' }, data: { status: 'CONFIRMED' } }),
-    ]);
-    console.log('[payments] Payment confirmed', { paymentId: payment.id, reservationId: payment.reservationId });
+    if (payment.status === 'REFUNDED') return;
+
+    const fulfilled = await this.prisma.$transaction(async (tx) => {
+      await tx.payment.update({ where: { id: payment.id }, data: { status: 'SUCCEEDED' } });
+      const confirmed = await tx.reservation.updateMany({
+        where: { id: payment.reservationId, status: 'PENDING' }, data: { status: 'CONFIRMED' },
+      });
+      if (confirmed.count === 1) return true;
+      // A repeated webhook finds the reservation already past PENDING.
+      const reservation = await tx.reservation.findUniqueOrThrow({
+        where: { id: payment.reservationId }, select: { status: true },
+      });
+      return reservation.status !== 'CANCELLED' && reservation.status !== 'EXPIRED';
+    });
+
+    if (fulfilled) {
+      console.log('[payments] Payment confirmed', { paymentId: payment.id, reservationId: payment.reservationId });
+      return;
+    }
+    // The slot was released before Stripe confirmed the charge, and may already
+    // belong to someone else. A failure here rejects the webhook so Stripe retries.
+    await this.refundUnfulfilledPayment(payment);
+  }
+
+  private async refundUnfulfilledPayment(payment: { id: number; reservationId: number; stripePaymentIntentId: string }) {
+    try {
+      await this.stripe.refunds.create(
+        { payment_intent: payment.stripePaymentIntentId },
+        { idempotencyKey: `unfulfilled-reservation:${payment.id}` },
+      );
+    } catch (error: unknown) {
+      if ((error as { code?: string }).code !== 'charge_already_refunded') {
+        console.error('[payments] Refund failed', { paymentId: payment.id, reservationId: payment.reservationId });
+        throw error;
+      }
+    }
+    await this.prisma.payment.update({ where: { id: payment.id }, data: { status: 'REFUNDED' } });
+    console.warn('[payments] Payment refunded: reservation no longer available', { paymentId: payment.id, reservationId: payment.reservationId });
+  }
+
+  // Stops a released reservation from being charged later. Best effort: if the
+  // charge already went through, the webhook refunds it.
+  async cancelPendingPaymentIntent(reservationId: number) {
+    const payment = await this.prisma.payment.findUnique({ where: { reservationId } });
+    if (!payment || (payment.status !== 'PENDING' && payment.status !== 'FAILED')) return;
+    try {
+      await this.stripe.paymentIntents.cancel(payment.stripePaymentIntentId);
+      await this.prisma.payment.updateMany({
+        where: { id: payment.id, status: 'PENDING' }, data: { status: 'FAILED' },
+      });
+    } catch {
+      console.warn('[payments] PaymentIntent could not be cancelled', { paymentId: payment.id, reservationId });
+    }
   }
 
   private assertPendingReservation(reservation: { status: string; expiresAt: Date | null }) {
@@ -330,17 +397,14 @@ export class PaymentsService {
     if (reservation.expiresAt && reservation.expiresAt < new Date()) throw new BadRequestException('La reserva ha expirado');
   }
 
-  private calculateReservationPrice(reservation: { startDatetime: Date; endDatetime: Date; parking: { pricePerHour: unknown } }) {
-    return (reservation.endDatetime.getTime() - reservation.startDatetime.getTime()) / 3_600_000 * Number(reservation.parking.pricePerHour);
-  }
-
   private calculateCreditsForReservation(totalPrice: number, currency: 'USD' | 'EUR') {
-    if (currency === 'USD') return Math.ceil(totalPrice * CREDITS_PER_USD);
+    if (currency === 'USD') return Math.round(totalPrice * CREDITS_PER_USD);
     const usdPerEur = Number(process.env.CREDITS_EUR_TO_USD_RATE);
     if (!Number.isFinite(usdPerEur) || usdPerEur <= 0) {
       throw new BadRequestException('El pago con créditos para reservas en EUR requiere configurar CREDITS_EUR_TO_USD_RATE');
     }
-    return Math.ceil(totalPrice * usdPerEur * CREDITS_PER_USD);
+    // Trim float noise first so 110.00000000000001 is not rounded up to 111.
+    return Math.ceil(Number((totalPrice * usdPerEur * CREDITS_PER_USD).toFixed(6)));
   }
 
   private matchesCreditPurchaseMetadata(intent: Stripe.PaymentIntent, purchase: { userId: number; credits: number; idempotencyKey: string }) {

@@ -12,8 +12,8 @@ import {
   import type { Request } from 'express';
   
   import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-  import { CreateVehicleDto } from 'src/vehicles/dto/create-vehicle.dto';
-  import { UpdateVehicleDto } from 'src/vehicles/dto/update-vehicle.dto';
+  import { CreateVehicleDto } from './dto/create-vehicle.dto';
+  import { UpdateVehicleDto } from './dto/update-vehicle.dto';
   import { UpdateVehicleDefaultDto } from './dto/update-vehicle-default.dto';
   import { VehiclesService } from './vehicles.service';
 

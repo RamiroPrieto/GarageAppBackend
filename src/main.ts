@@ -15,6 +15,9 @@ async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     rawBody: true,
   });
+  // Railway terminates TLS in front of the app; without this every client would
+  // share the proxy's IP and therefore one rate limit.
+  app.set('trust proxy', 1);
   // Profile photos are compressed client-side data URLs. Nest keeps the raw
   // request body enabled above, which Stripe still uses for signature checks.
   app.useBodyParser('json', { limit: '3mb' });

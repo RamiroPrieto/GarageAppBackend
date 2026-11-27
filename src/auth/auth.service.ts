@@ -7,18 +7,18 @@ import {
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
-import { createHash, randomBytes } from 'crypto';
+import { createHash, createHmac, randomBytes, randomInt, timingSafeEqual } from 'crypto';
 import { OAuth2Client } from 'google-auth-library';
-import { createRemoteJWKSet, jwtVerify } from 'jose';
 
 import { PrismaService } from '../prisma/prisma.service';
 import { RegisterDto } from './dto/register.dto';
-import { AppleLoginDto } from './dto/apple-login.dto';
 import { LoginDto } from './dto/login.dto';
+import { ResetPasswordDto } from './dto/password-reset.dto';
 import { EmailService } from '../email/email.service';
 
-const APPLE_ISSUER = 'https://appleid.apple.com';
-const APPLE_JWKS = createRemoteJWKSet(new URL('https://appleid.apple.com/auth/keys'));
+const RESET_CODE_TTL_MS = 15 * 60 * 1000;
+const RESET_CODE_COOLDOWN_MS = 60 * 1000;
+const RESET_CODE_MAX_ATTEMPTS = 5;
 
 @Injectable()
 export class AuthService {
@@ -201,6 +201,73 @@ export class AuthService {
     return { message: 'Se l’account esiste, abbiamo inviato un nuovo link di conferma.' };
   }
 
+  async forgotPassword(email: string) {
+    // The answer never reveals whether the account exists.
+    const response = { sent: true };
+    const user = await this.prisma.user.findUnique({ where: { email } });
+    if (!user) return response;
+
+    const recent = await this.prisma.passwordResetCode.findFirst({
+      where: { userId: user.id, createdAt: { gt: new Date(Date.now() - RESET_CODE_COOLDOWN_MS) } },
+    });
+    if (recent) return response;
+
+    const code = randomInt(0, 1_000_000).toString().padStart(6, '0');
+    await this.prisma.$transaction([
+      // Only the newest code works.
+      this.prisma.passwordResetCode.updateMany({
+        where: { userId: user.id, usedAt: null }, data: { usedAt: new Date() },
+      }),
+      this.prisma.passwordResetCode.create({
+        data: {
+          userId: user.id,
+          codeHash: this.hashResetCode(user.id, code),
+          expiresAt: new Date(Date.now() + RESET_CODE_TTL_MS),
+        },
+      }),
+    ]);
+    await this.emailService.sendPasswordResetEmail(user.firstName, user.email, code);
+    return response;
+  }
+
+  async resetPassword({ email, code, password }: ResetPasswordDto) {
+    const invalid = () => new BadRequestException('El código no es válido o venció');
+    const user = await this.prisma.user.findUnique({ where: { email } });
+    if (!user) throw invalid();
+
+    const now = new Date();
+    const reset = await this.prisma.passwordResetCode.findFirst({
+      where: { userId: user.id, usedAt: null, expiresAt: { gt: now } },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (!reset) throw invalid();
+
+    // Count the attempt before comparing, so parallel guesses cannot exceed the limit.
+    const attempt = await this.prisma.passwordResetCode.updateMany({
+      where: { id: reset.id, usedAt: null, attempts: { lt: RESET_CODE_MAX_ATTEMPTS } },
+      data: { attempts: { increment: 1 } },
+    });
+    const matches = timingSafeEqual(
+      Buffer.from(reset.codeHash, 'hex'),
+      Buffer.from(this.hashResetCode(user.id, code), 'hex'),
+    );
+    if (attempt.count !== 1 || !matches) throw invalid();
+
+    const hashedPassword = await bcrypt.hash(password, 12);
+    await this.prisma.$transaction(async (tx) => {
+      const claimed = await tx.passwordResetCode.updateMany({
+        where: { id: reset.id, usedAt: null }, data: { usedAt: now },
+      });
+      if (claimed.count !== 1) throw invalid();
+      await tx.user.update({
+        where: { id: user.id },
+        // Receiving the code proves ownership of the email address.
+        data: { password: hashedPassword, emailVerified: true, passwordChangedAt: now },
+      });
+    });
+    return { reset: true };
+  }
+
   async googleLogin(idToken: string) {
     const clientId = process.env.GOOGLE_WEB_CLIENT_ID;
     if (!clientId) {
@@ -213,7 +280,10 @@ export class AuthService {
     try {
       const ticket = await client.verifyIdToken({ idToken, audience: clientId });
       payload = ticket.getPayload();
-    } catch {
+    } catch (error: unknown) {
+      // Only the reason, cut before any token contents Google may append.
+      const reason = error instanceof Error ? error.message.split(':')[0].slice(0, 100) : 'unknown';
+      console.warn('[auth] Google token rejected', { reason });
       throw new UnauthorizedException('Credenziale Google non valida');
     }
 
@@ -239,59 +309,6 @@ export class AuthService {
             password: null,
             googleId: payload.sub,
             profileImage: payload.picture,
-            emailVerified: true,
-          },
-        });
-      }
-    }
-
-    return this.createAccessToken(user.id, user.email);
-  }
-
-  async appleLogin({ idToken, firstName, lastName }: AppleLoginDto) {
-    const clientId = process.env.APPLE_CLIENT_ID;
-    if (!clientId) {
-      throw new ServiceUnavailableException('Apple Sign-In non è configurato');
-    }
-
-    let payload: { sub?: string; email?: string; email_verified?: boolean | string };
-    try {
-      const verified = await jwtVerify(idToken, APPLE_JWKS, {
-        issuer: APPLE_ISSUER,
-        audience: clientId,
-        algorithms: ['RS256'],
-      });
-      payload = verified.payload;
-    } catch {
-      throw new UnauthorizedException('Credenziale Apple non valida');
-    }
-
-    if (!payload.sub) {
-      throw new UnauthorizedException('Apple non ha restituito un identificatore utente valido');
-    }
-
-    let user = await this.prisma.user.findUnique({ where: { appleId: payload.sub } });
-
-    if (!user) {
-      const emailVerified = payload.email_verified === true || payload.email_verified === 'true';
-      if (!payload.email || !emailVerified) {
-        throw new UnauthorizedException('Apple non ha verificato questo indirizzo email');
-      }
-
-      user = await this.prisma.user.findUnique({ where: { email: payload.email } });
-      if (user) {
-        user = await this.prisma.user.update({
-          where: { id: user.id },
-          data: { appleId: payload.sub, emailVerified: true },
-        });
-      } else {
-        user = await this.prisma.user.create({
-          data: {
-            firstName: firstName?.trim() || 'Usuario',
-            lastName: lastName?.trim() || '',
-            email: payload.email,
-            password: null,
-            appleId: payload.sub,
             emailVerified: true,
           },
         });
@@ -383,6 +400,11 @@ export class AuthService {
 
   private verificationExpiry() {
     return new Date(Date.now() + 24 * 60 * 60 * 1000);
+  }
+
+  // Keyed, because six digits are trivial to brute-force from a plain hash.
+  private hashResetCode(userId: number, code: string) {
+    return createHmac('sha256', process.env.JWT_SECRET!).update(`${userId}:${code}`).digest('hex');
   }
 
   private hashToken(token: string) {

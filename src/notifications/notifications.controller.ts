@@ -1,4 +1,4 @@
-import { Body, Controller, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Post, Req, UseGuards } from '@nestjs/common';
 import type { Request } from 'express';
 import { IsString, Matches } from 'class-validator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -18,5 +18,11 @@ export class NotificationsController {
   @Post('push-token')
   register(@Req() request: Request, @Body() dto: RegisterPushTokenDto) {
     return this.notifications.registerPushToken(request.user!.userId, dto.token);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Delete('push-token')
+  unregister(@Req() request: Request, @Body() dto: RegisterPushTokenDto) {
+    return this.notifications.unregisterPushToken(request.user!.userId, dto.token);
   }
 }

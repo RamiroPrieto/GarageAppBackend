@@ -1,13 +1,14 @@
-import { BadRequestException, HttpException, HttpStatus, Injectable } from '@nestjs/common';
+import { BadRequestException, ConflictException, HttpException, HttpStatus, Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { CreateSupportRequestDto } from './dto/create-support-request.dto';
 import { EmailService } from '../email/email.service';
 import { SmsService } from '../sms/sms.service';
+import { PaymentsService } from '../payments/payments.service';
 
 @Injectable()
 export class UsersService {
-  constructor(private readonly prisma: PrismaService, private readonly emailService: EmailService, private readonly smsService: SmsService) {}
+  constructor(private readonly prisma: PrismaService, private readonly emailService: EmailService, private readonly smsService: SmsService, private readonly payments: PaymentsService) {}
 
   async getMe(userId: number) {
     return this.prisma.user.findUnique({
@@ -40,6 +41,67 @@ export class UsersService {
         profileImage: true, emailVerified: true, creditBalance: true,
       },
     });
+  }
+
+  // Erases personal data but keeps the rows that payments and other people's
+  // bookings depend on.
+  async deleteMe(userId: number) {
+    const stripeCustomerId = await this.prisma.$transaction(async (tx) => {
+      // Same lock reservations take, so nobody can book these parkings meanwhile.
+      await tx.$queryRaw`SELECT id FROM "Parking" WHERE "ownerId" = ${userId} FOR UPDATE`;
+
+      const user = await tx.user.findUniqueOrThrow({
+        where: { id: userId }, select: { creditBalance: true, stripeCustomerId: true },
+      });
+      if (user.creditBalance > 0) {
+        throw new ConflictException({ message: 'Todavía tenés créditos en tu cuenta', code: 'ACCOUNT_HAS_CREDITS' });
+      }
+      const now = new Date();
+      const openReservations = await tx.reservation.count({
+        where: {
+          AND: [
+            { OR: [{ userId }, { parking: { ownerId: userId } }] },
+            {
+              OR: [
+                { status: 'PENDING', expiresAt: { gt: now } },
+                { status: { in: ['CONFIRMED', 'ACTIVE'] }, endDatetime: { gt: now } },
+              ],
+            },
+          ],
+        },
+      });
+      if (openReservations > 0) {
+        throw new ConflictException({ message: 'Tenés reservas en curso', code: 'ACCOUNT_HAS_RESERVATIONS' });
+      }
+
+      await tx.pushToken.deleteMany({ where: { userId } });
+      await tx.favorite.deleteMany({ where: { OR: [{ userId }, { parking: { ownerId: userId } }] } });
+      await tx.review.deleteMany({ where: { userId } });
+      await tx.vehicle.deleteMany({ where: { userId } });
+      await tx.emailVerificationToken.deleteMany({ where: { userId } });
+      await tx.passwordResetCode.deleteMany({ where: { userId } });
+      await tx.parkingPhoto.deleteMany({ where: { parking: { ownerId: userId } } });
+      await tx.parking.updateMany({
+        where: { ownerId: userId },
+        data: {
+          active: false, title: 'Parking eliminado', description: null,
+          address: '-', city: '-', country: '-', latitude: 0, longitude: 0,
+        },
+      });
+      await tx.user.update({
+        where: { id: userId },
+        data: {
+          firstName: 'Usuario', lastName: 'eliminado', email: `deleted-${userId}@deleted.invalid`,
+          password: null, googleId: null, appleId: null, phone: null, pendingPhone: null,
+          phoneVerified: false, phoneVerificationSentAt: null, profileImage: null,
+          emailVerified: false, stripeCustomerId: null, deletedAt: now,
+        },
+      });
+      return user.stripeCustomerId;
+    });
+
+    if (stripeCustomerId) await this.payments.deleteCustomer(userId, stripeCustomerId);
+    return { deleted: true };
   }
 
   async requestPhoneChange(userId: number, phone: string) {

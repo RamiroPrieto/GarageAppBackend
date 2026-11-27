@@ -15,6 +15,12 @@ export class NotificationsService {
     return registered;
   }
 
+  async unregisterPushToken(userId: number, token: string) {
+    // Scoped to the user: the device may already belong to another session.
+    await this.prisma.pushToken.deleteMany({ where: { userId, token } });
+    return { removed: true };
+  }
+
   async sendReservationReminder(userId: number, title: string, body: string, reservationId: number) {
     const tokens = await this.prisma.pushToken.findMany({ where: { userId }, select: { token: true } });
     console.log('[notifications] Reminder dispatch requested', { userId, reservationId, tokenCount: tokens.length });

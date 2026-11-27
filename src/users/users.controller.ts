@@ -1,5 +1,6 @@
 import {
   Controller,
+  Delete,
   Get,
   Patch,
   Body,
@@ -29,6 +30,12 @@ export class UsersController {
   @Patch('me')
   updateMe(@Req() request: Request, @Body() dto: UpdateProfileDto) {
     return this.usersService.updateMe(request.user!.userId, dto);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Delete('me')
+  deleteMe(@Req() request: Request) {
+    return this.usersService.deleteMe(request.user!.userId);
   }
 
   @UseGuards(JwtAuthGuard)

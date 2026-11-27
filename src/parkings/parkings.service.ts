@@ -7,7 +7,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateParkingDto } from './dto/create-parking.dto';
-import { UpdateParkingDto } from 'src/parkings/dto/update-parking.dto';
+import { UpdateParkingDto } from './dto/update-parking.dto';
 import { Prisma } from '@prisma/client';
 import { UpdateParkingActiveDto } from './dto/update-parking-active.dto';
 import { ReservationStatus } from '@prisma/client';
@@ -511,6 +511,7 @@ export class ParkingsService {
                   in: [
                     ReservationStatus.PENDING,
                     ReservationStatus.CONFIRMED,
+                    ReservationStatus.ACTIVE,
                   ],
                 },
               },

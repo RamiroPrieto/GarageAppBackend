@@ -80,6 +80,11 @@ model User {
   emailVerified Boolean @default(false)
   isAdmin       Boolean @default(false)
 
+  // Sessions issued before this moment are rejected.
+  passwordChangedAt DateTime?
+  // Personal data is erased on deletion; the row stays for payment records.
+  deletedAt DateTime?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -101,6 +106,21 @@ model User {
   creditTransactions CreditTransaction[]
   creditPurchases    CreditPurchase[]
   emailVerificationTokens EmailVerificationToken[]
+  passwordResetCodes PasswordResetCode[]
+}
+
+model PasswordResetCode {
+  id Int @id @default(autoincrement())
+  userId Int
+  codeHash String
+  attempts Int @default(0)
+  expiresAt DateTime
+  usedAt DateTime?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
 }
 
 model EmailVerificationToken {
